@@ -102,6 +102,13 @@ interface ReceiptProps {
     advanceAmount?: number;
     remainingPaid?: number;
     balance?: number;
+    dueAmount?: number;
+    grandTotal?: number;
+    settlementAmount?: number;
+    receipts?: any[];
+    payments?: any[];
+    isDischarge?: boolean;
+    isDischargeTransaction?: boolean;
     method: 'cash' | 'card' | 'upi' | string;
     mode?: string;
     status: string;
@@ -244,6 +251,7 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
               patient: mappedPatient,
               appointment,
               payment,
+              registrationType: (payment.isDischarge || payment.isDischargeTransaction || appointment.specialization?.toUpperCase().includes('DISCHARGE') || appointment.type?.toUpperCase().includes('DISCHARGE') || appointment.type?.toUpperCase().includes('SETTLEMENT') || (patient.dischargeType && patient.dischargeType.toUpperCase() !== 'NONE')) ? 'DISCHARGE' : isOPDOrReg ? 'OPD' : 'IPD',
               headerHtml,
               footerHtml,
               showGuardianDetails,
@@ -258,7 +266,7 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
                 notes: patient.symptoms || appointment.notes
               },
               payment,
-              registrationType: isOPDOrReg ? 'OPD' : (appointment.specialization?.toUpperCase().includes('DISCHARGE') || appointment.type?.toUpperCase().includes('DISCHARGE')) ? 'DISCHARGE' : 'IPD',
+              registrationType: (payment.isDischarge || payment.isDischargeTransaction || appointment.specialization?.toUpperCase().includes('DISCHARGE') || appointment.type?.toUpperCase().includes('DISCHARGE') || appointment.type?.toUpperCase().includes('SETTLEMENT') || (patient.dischargeType && patient.dischargeType.toUpperCase() !== 'NONE')) ? 'DISCHARGE' : isOPDOrReg ? 'OPD' : 'IPD',
               headerHtml,
               footerHtml,
               returnUrl: '#',
@@ -315,12 +323,17 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
             
             /* Print specific fixes */
             @media print {
-              .receipt-container { padding: 5mm !important; }
+              .receipt-container { padding: 0 5mm !important; }
               .section { page-break-inside: auto !important; }
               .section-header { -webkit-print-color-adjust: exact; }
-              tr { page-break-inside: avoid !important; }
-              .print-header-spacer { margin-bottom: 0 !important; height: 160px !important; }
-              .print-footer-spacer { margin-top: 0 !important; height: 180px !important; }
+              .print-table { width: 100% !important; page-break-inside: auto !important; }
+              .print-table > tbody > tr { page-break-inside: auto !important; }
+              .print-table > tbody > tr > td { page-break-inside: auto !important; }
+              .data-grid tr, .payment-table tr, .vitals-grid tr { page-break-inside: avoid !important; }
+              .header-wrapper { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; background: white !important; z-index: 1000 !important; }
+              .footer-wrapper { position: fixed !important; bottom: 0 !important; left: 0 !important; right: 0 !important; background: white !important; z-index: 1000 !important; }
+              .print-header-spacer { margin-bottom: 0 !important; height: 135px !important; }
+              .print-footer-spacer { margin-top: 0 !important; height: 125px !important; }
             }
           </style>
         </head>`);
