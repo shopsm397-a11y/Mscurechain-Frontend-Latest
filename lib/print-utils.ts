@@ -1710,6 +1710,25 @@ export const generateClinicalReceiptHtml = (data: any) => {
     appointment.appointmentHonorific || appointment.honorific || appointment.patientDetails?.honorific || patient.honorific || patient.profile?.honorific || patient.honorificTitle || patient.patientHonorific
   );
 
+  const mrnCandidates = [
+    patient.mrn,
+    patient.mrnNumber,
+    patient.medicalRecordNumber,
+    patient.patientId,
+    patient.uhid,
+    patient.user?.mrn,
+    patient.user?.patientId,
+    appointment.mrn,
+    appointment.patientDetails?.mrn,
+    (appointment as any)?.patientMrn,
+    (payment as any)?.mrn,
+    (payment as any)?.patientMrn,
+    (payment as any)?.referenceNode,
+    (payment as any)?.referenceId,
+    (appointment as any)?.referenceNode
+  ];
+  const resolvedPatientMrn = mrnCandidates.find(c => c && typeof c === 'string' && c.trim() !== '' && c.trim() !== 'N/A' && c.trim() !== 'Resolving...' && c.trim() !== '-' && !c.includes('undefined')) || (patient.mrn && patient.mrn !== 'Resolving...' ? patient.mrn : "N/A");
+
   const isDischargeTx = Boolean(
     payment?.isDischarge ||
     payment?.isDischargeTransaction ||
@@ -2258,7 +2277,7 @@ export const generateClinicalReceiptHtml = (data: any) => {
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
                             <div>
                                 <div style="font-size: 8px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">MRN / Mobile</div>
-                                <div style="font-size: 10px; font-weight: 700; color: #1e293b;">${patient.mrn} / ${patient.mobile}</div>
+                                <div style="font-size: 10px; font-weight: 700; color: #1e293b;">${resolvedPatientMrn} / ${patient.mobile || patient.user?.mobile || "N/A"}</div>
                             </div>
                             <div>
                                 <div style="font-size: 8px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Age / Gender</div>
@@ -4410,7 +4429,7 @@ export const generateAddBillsReceiptHtml = (data: any) => {
                     <div style="display: grid; grid-template-columns: 1.2fr 1fr 1fr 1.2fr; gap: 8px;">
                         <div>
                             <div style="font-size: 7.5px; font-weight: 800; color: #64748b; text-transform: uppercase;">MRN / Mobile</div>
-                            <div style="font-size: 9.5px; font-weight: 700; color: #1e293b;">${patient.mrn || "N/A"} / ${patient.mobile || "N/A"}</div>
+                            <div style="font-size: 9.5px; font-weight: 700; color: #1e293b;">${patient.mrn || (patient as any)?.mrnNumber || (patient as any)?.medicalRecordNumber || (patient as any)?.patientId || (patient as any)?.uhid || (patient as any)?.user?.mrn || (appointment as any)?.mrn || (appointment as any)?.patientDetails?.mrn || (appointment as any)?.patientMrn || (payment as any)?.mrn || (payment as any)?.patientMrn || (payment as any)?.referenceNode || (appointment as any)?.referenceNode || "N/A"} / ${patient.mobile || (patient as any)?.user?.mobile || "N/A"}</div>
                         </div>
                         <div>
                             <div style="font-size: 7.5px; font-weight: 800; color: #64748b; text-transform: uppercase;">Age / Gender</div>

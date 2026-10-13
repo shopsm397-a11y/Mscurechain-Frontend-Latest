@@ -195,8 +195,31 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
       const doc = iframeRef.current.contentDocument;
       if (doc) {
         // Map props to match generateClinicalReceiptHtml expectations
+        const pAny = patient as any;
+        const aAny = appointment as any;
+        const payAny = payment as any;
+        const mrnCandidates = [
+          pAny?.mrn,
+          pAny?.mrnNumber,
+          pAny?.medicalRecordNumber,
+          pAny?.patientId,
+          pAny?.uhid,
+          pAny?.user?.mrn,
+          pAny?.user?.patientId,
+          aAny?.mrn,
+          aAny?.patientDetails?.mrn,
+          aAny?.patientMrn,
+          payAny?.mrn,
+          payAny?.patientMrn,
+          payAny?.referenceNode,
+          payAny?.referenceId,
+          aAny?.referenceNode
+        ];
+        const resolvedPatientMrn = mrnCandidates.find(c => c && typeof c === 'string' && c.trim() !== '' && c.trim() !== 'N/A' && c.trim() !== 'Resolving...' && c.trim() !== '-' && !c.includes('undefined')) || (patient.mrn && patient.mrn !== 'Resolving...' ? patient.mrn : "N/A");
+
         const mappedPatient = {
           ...patient,
+          mrn: resolvedPatientMrn,
           name: sanitizePatientName(patient.name),
           dob: patient.dateOfBirth || patient.dob, // crucial mapping
           vitals: patient.vitals ? {
@@ -546,6 +569,7 @@ Thank you for choosing ${hospital.name}. Stay Healthy.`;
                     <WhatsAppSendButton
                       ref={whatsAppButtonRef}
                       hospitalId={hospitalId}
+                      department={isLab ? 'lab' : 'frontdesk'}
                       targetRef={iframeRef}
                       phoneNumber={patient.mobile}
                       documentName={isLab ? `Lab_Receipt_${fullPatientName.replace(/\s+/g, '_')}.pdf` : `Appointment_Receipt_${fullPatientName.replace(/\s+/g, '_')}.pdf`}

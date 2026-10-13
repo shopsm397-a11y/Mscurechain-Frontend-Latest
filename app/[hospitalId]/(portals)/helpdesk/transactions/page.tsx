@@ -271,6 +271,40 @@ export default function TransactionsPage() {
         return map;
     }, [transactions]);
 
+    const patientMRNMap = useMemo(() => {
+        const map = new Map<string, string>();
+        transactions.forEach((tx: any) => {
+            const rawMrn = (
+                tx.patientMRN ||
+                tx.mrn ||
+                tx.patientDetails?.mrn ||
+                tx.patient?.mrn ||
+                tx.patient?.patientId ||
+                tx.patient?.user?.patientId ||
+                tx.patient?.uhid ||
+                tx.referenceId?.mrn ||
+                tx.referenceId?.patientMRN ||
+                tx.referenceId?.patient?.mrn ||
+                tx.referenceId?.patientDetails?.mrn ||
+                ''
+            ).toString().trim();
+
+            if (rawMrn && rawMrn !== 'Resolving...' && rawMrn !== 'N/A' && rawMrn !== '-') {
+                const cleanName = cleanPatientName(tx.patientName || tx.patient?.name || tx.referenceId?.patientName || '').toUpperCase();
+                if (cleanName && cleanName !== 'UNNAMED PATIENT' && cleanName !== 'UNKNOWN') {
+                    map.set(cleanName, rawMrn);
+                }
+                const mob = (tx.patientMobile || tx.mobile || tx.referenceId?.mobile || tx.patient?.mobile || tx.patientDetails?.mobile || '').trim();
+                if (mob) map.set(mob, rawMrn);
+                const pId = tx.patientId || tx.patient?._id || tx.patient || tx.user?._id || tx.user;
+                if (pId && typeof pId === 'string') map.set(pId, rawMrn);
+                const refId = tx.referenceId?._id || tx.referenceId?.id;
+                if (refId && typeof refId === 'string') map.set(refId, rawMrn);
+            }
+        });
+        return map;
+    }, [transactions]);
+
     const handleExport = async (range: "daily" | "weekly" | "monthly" | "all") => {
         try {
             setExporting(true);
