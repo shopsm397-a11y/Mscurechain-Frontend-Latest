@@ -24,6 +24,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import MainHeader from '@/components/printers/MainHeader';
 import MainFooter from '@/components/printers/MainFooter';
 import { useTenantLink } from '@/hooks/useTenantLink';
+import { WhatsAppSendButton, READ_MORE, WA_DIVIDER } from '@/components/WhatsApp/WhatsAppSendButton';
 
 function CreateLabTokenPage({ params }: { params: Promise<{ hospitalId: string }> }) {
   const resolvedParams = use(params);
@@ -69,6 +70,41 @@ function CreateLabTokenPage({ params }: { params: Promise<{ hospitalId: string }
   const [subtotal, setSubtotal] = useState(0);
   const [tax, setTax] = useState(0);
   const [total, setTotal] = useState(0);
+  const labTokenIframeRef = React.useRef<HTMLIFrameElement>(null);
+
+  const labTokenCaption = React.useMemo(() => {
+    if (!patientData) return '';
+    const pName = patientData?.personal?.name || patientData?.name || 'Valued Patient';
+    const isMongoId = (val?: string) => typeof val === 'string' && /^[0-9a-fA-F]{24}$/.test(val);
+    const getValidMrn = (val?: any) => (val && typeof val === 'string' && !isMongoId(val)) ? val : null;
+
+    const mrn = getValidMrn(patientData?.mrn) || getValidMrn(patientData?.personal?.mrn) || getValidMrn((patientData as any)?.patientMrn) || 'N/A';
+    const doc = doctorName ? (doctorName.startsWith('Dr.') ? doctorName : `Dr. ${doctorName}`) : 'Attending Specialist';
+    const tok = tokenNumber || 'LAB-TOKEN';
+    const testCount = tests.filter(t => t.name.trim()).length;
+    const priorityStr = priority.toUpperCase();
+    const hospName = hospitalData?.name || doctorData?.hospital?.name || 'HORIZIN HOSPITAL';
+
+    return `*${hospName.toUpperCase()}*
+${WA_DIVIDER}
+*LAB REQUISITION & TOKEN CONFIRMATION*
+
+*Patient Name:* ${pName}
+*MRN / Token ID:* ${mrn}
+*Ordering Doctor:* ${doc}
+*Token Number:* ${tok}
+*Priority:* ${priorityStr}
+*Investigations Requested:* ${testCount} Test(s)
+*Estimated Total:* ₹${total.toFixed(2)}
+${WA_DIVIDER}
+${READ_MORE}
+*Important Patient Instructions:*
+• Show this token at the Laboratory Sample Collection Desk.
+• Complete any required pre-test instructions (e.g. 8-12 hours fasting if specified).
+• Contact ${hospName} Helpdesk for any queries.
+
+Thank you for choosing ${hospName}. Stay Healthy.`;
+  }, [patientData, doctorName, tokenNumber, tests, priority, total, hospitalData, doctorData]);
 
   useEffect(() => {
     if (appointmentId) {
@@ -270,10 +306,11 @@ function CreateLabTokenPage({ params }: { params: Promise<{ hospitalId: string }
                 padding: 0;
               }
               .container {
-                width: 210mm;
-                min-height: 297mm;
+                width: 100%;
+                max-width: 210mm;
+                min-height: 100%;
                 margin: 0 auto;
-                padding: 10mm 15mm 10mm 20mm;
+                padding: 8mm 12mm;
                 box-sizing: border-box;
                 display: flex;
                 flex-direction: column;
@@ -389,10 +426,11 @@ function CreateLabTokenPage({ params }: { params: Promise<{ hospitalId: string }
                 padding: 0;
               }
               .container {
-                width: 210mm;
-                min-height: 297mm;
+                width: 100%;
+                max-width: 210mm;
+                min-height: 100%;
                 margin: 0 auto;
-                padding: 10mm 15mm 10mm 20mm;
+                padding: 8mm 12mm;
                 box-sizing: border-box;
                 display: flex;
                 flex-direction: column;
@@ -731,23 +769,47 @@ function CreateLabTokenPage({ params }: { params: Promise<{ hospitalId: string }
               <CheckCircle size={32} />
             </div>
             <div>
+              {tokenNumber && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-50 text-purple-700 rounded-full text-xs font-black tracking-wider uppercase mb-2 border border-purple-100">
+                  Token: {tokenNumber}
+                </div>
+              )}
               <h2 className="text-2xl font-black text-gray-900">Lab Token Created!</h2>
-              <p className="text-gray-500">Ready to print documents</p>
+              <p className="text-gray-500 text-sm mt-0.5">Ready to print documents</p>
             </div>
 
             <div className="grid gap-3">
               <button
                 onClick={() => handlePrintDocument('labToken')}
-                className="w-full py-3 px-4 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold rounded-xl flex items-center justify-center gap-2"
+                className="w-full py-3 px-4 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
               >
                 <Printer size={18} /> Print Lab Token
               </button>
               <button
                 onClick={() => handlePrintDocument('billing')}
-                className="w-full py-3 px-4 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-xl flex items-center justify-center gap-2"
+                className="w-full py-3 px-4 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
               >
                 <Printer size={18} /> Print Billing Receipt
               </button>
+              
+              <WhatsAppSendButton
+                hospitalId={hospitalIdFromParams}
+                targetRef={labTokenIframeRef}
+                phoneNumber={patientData?.personal?.mobile || patientData?.personal?.phone || patientData?.mobile || patientData?.phone || ''}
+                documentName={`Lab_Token_${tokenNumber || 'Token'}.pdf`}
+                caption={labTokenCaption}
+                containerClassName="w-full flex items-stretch gap-2"
+                className="flex-1 py-3 px-4 text-xs font-bold"
+              />
+
+              {generatedHtml?.labToken && (
+                <iframe
+                  ref={labTokenIframeRef}
+                  srcDoc={generatedHtml.labToken}
+                  className="fixed -left-[9999px] -top-[9999px] w-[210mm] h-[297mm] pointer-events-none opacity-0"
+                />
+              )}
+
               {/* Visual Confirmation */}
               <div className="mt-2 p-3 bg-purple-50 rounded-xl border border-purple-100 flex items-center gap-3">
                 <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center text-purple-600">

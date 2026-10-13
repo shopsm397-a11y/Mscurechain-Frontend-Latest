@@ -11,6 +11,8 @@ import { useReactToPrint } from 'react-to-print';
 import { toast } from 'react-hot-toast';
 import { useTenantLink } from '@/hooks/useTenantLink';
 import { usePrintStore } from '@/stores/printStore';
+import { WhatsAppSendButton, READ_MORE, WA_DIVIDER } from '@/components/WhatsApp/WhatsAppSendButton';
+import { formatPatientNameWithPrefix } from '@/lib/utils/name-utils';
 
 const InvoicePreviewPage = () => {
     const params = useParams() as any;
@@ -25,7 +27,7 @@ const InvoicePreviewPage = () => {
 
     const invoiceId = params?.id as string;
 
-    const shopDetails: ShopDetails = {
+    const shopDetails: ShopDetails = React.useMemo(() => ({
         name: (user as any)?.shopName || user?.name || 'Pharmacy Store',
         address: (user as any)?.address || 'No Address Provided',
         phone: (user as any)?.mobile || (user as any)?.phone || '-',
@@ -34,12 +36,81 @@ const InvoicePreviewPage = () => {
         dlNo: (user as any)?.licenseNo || '',
         logo: (user as any)?.image || (user as any)?.logo || (user as any)?.avatar || (user as any)?.profilePic,
         pharmacyTerms: user?.pharmacyTerms || []
-    };
+    }), [user]);
+
+    const hospitalId = (params?.hospitalId as string) || '';
+
+    const pharmaInvoiceCaption = React.useMemo(() => {
+        if (!bill) return '';
+        const pName = formatPatientNameWithPrefix(bill.patientName || (bill as any).patient?.name || 'Valued Patient', (bill as any).patient?.honorific || (bill as any).honorific, true);
+        const isMongoId = (val?: string) => typeof val === 'string' && /^[0-9a-fA-F]{24}$/.test(val);
+        const getValidMrn = (val?: any) => (val && typeof val === 'string' && !isMongoId(val)) ? val : null;
+
+        const mrn =
+            getValidMrn(bill.mrn) ||
+            getValidMrn((bill as any).patientMrn) ||
+            getValidMrn((bill as any).patient?.mrn) ||
+            getValidMrn((bill as any).user?.mrn) ||
+            'N/A';
+        const docName = bill.doctorName ? (bill.doctorName.startsWith('Dr.') ? bill.doctorName : `Dr. ${bill.doctorName}`) : 'Attending Specialist';
+        const hospName = shopDetails.name || 'HORIZIN HOSPITAL PHARMACY';
+        const invId = bill.invoiceId || 'INV';
+        const dateStr = bill.createdAt ? new Date(bill.createdAt).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB');
+        const totalAmt = bill.paymentSummary?.grandTotal ?? 0;
+        const statusStr = bill.paymentSummary?.status || 'PAID';
+        const pMode = bill.paymentSummary?.paymentMode || 'CASH';
+        const itemsCount = bill.items?.length || 0;
+
+        return `*${hospName.toUpperCase()}*
+${WA_DIVIDER}
+*PHARMACY MEDICINE INVOICE & RECEIPT*
+
+*Patient Name:* ${pName}
+*MRN / Token ID:* ${mrn}
+*Prescribed Doctor:* ${docName}
+*Invoice No:* ${invId}
+*Invoice Date:* ${dateStr}
+*Medicines Dispensed:* ${itemsCount} Item(s)
+*Payment Mode:* ${String(pMode).toUpperCase()}
+*Total Amount:* ₹${totalAmt} (${String(statusStr).toUpperCase()})
+${WA_DIVIDER}
+${READ_MORE}
+*Important Patient Instructions:*
+• Find your official pharmacy tax invoice PDF attached above.
+• Check your medicines and dosage schedule carefully.
+• Keep medicines in a cool, dry place away from direct sunlight.
+• Contact ${hospName} Pharmacy for any queries or refilling.
+
+Thank you for choosing ${hospName}. Stay Healthy.`;
+    }, [bill, shopDetails]);
 
     const handlePrint = useReactToPrint({
         contentRef: componentRef,
         documentTitle: bill ? `Invoice_${bill.invoiceId}` : 'Invoice',
     });
+
+    const [triggerWhatsApp, setTriggerWhatsApp] = useState(false);
+    const [autoWhatsApp, setAutoWhatsApp] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('msc_auto_whatsapp') === 'true';
+        }
+        return false;
+    });
+
+    const handleToggleAutoWhatsApp = (val: boolean) => {
+        setAutoWhatsApp(val);
+        if (typeof window !== 'undefined') {
+            localStorage.setItem('msc_auto_whatsapp', String(val));
+        }
+    };
+
+    const triggerPrintAndWhatsApp = () => {
+        handlePrint();
+        if (autoWhatsApp) {
+            setTriggerWhatsApp(true);
+            setTimeout(() => setTriggerWhatsApp(false), 500);
+        }
+    };
 
     useEffect(() => {
         const fetchBill = async () => {
@@ -61,13 +132,11 @@ const InvoicePreviewPage = () => {
     useEffect(() => {
         if (!isLoading && bill && ((searchParams?.get('print') ?? null) ?? null) === 'true') {
             const timer = setTimeout(() => {
-                handlePrint();
-                // Optional: remove query param after print triggered so page refresh doesn't re-trigger it
-                // router.replace(getPath(`/pharmacy/billing/preview/${invoiceId}`), { scroll: false });
+                triggerPrintAndWhatsApp();
             }, 1000); // Small delay to ensure rendering is complete
             return () => clearTimeout(timer);
         }
-    }, [isLoading, bill, searchParams, handlePrint]);
+    }, [isLoading, bill, searchParams]);
 
     if (isLoading) {
         return (
@@ -136,8 +205,20 @@ const InvoicePreviewPage = () => {
                                 <span>Header & Footer</span>
                             </label>
 
+                            <WhatsAppSendButton
+                                hospitalId={hospitalId}
+                                targetRef={componentRef}
+                                phoneNumber={bill.customerPhone}
+                                documentName={`Invoice_${bill.invoiceId || 'Pharmacy'}.pdf`}
+                                caption={pharmaInvoiceCaption}
+                                layout="stacked"
+                                autoSend={autoWhatsApp}
+                                onAutoSendChange={handleToggleAutoWhatsApp}
+                                triggerSend={triggerWhatsApp}
+                            />
+
                             <button
-                                onClick={() => handlePrint()}
+                                onClick={triggerPrintAndWhatsApp}
                                 className="w-full flex items-center justify-between p-3.5 md:p-4 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 group transition-all active:scale-[0.98] shadow-md shadow-teal-500/10"
                             >
                                 <span className="flex items-center gap-3">
