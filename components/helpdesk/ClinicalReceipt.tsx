@@ -121,9 +121,11 @@ interface ReceiptProps {
   labTests?: any[];
   onClose: () => void;
   onConfirm?: () => Promise<void>;
+  isBooking?: boolean;
 }
 
-function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment, isLab: propIsLab, labTests: propLabTests, onClose, onConfirm }: ReceiptProps) {
+function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment, isLab: propIsLab, labTests: propLabTests, onClose, onConfirm, isBooking }: ReceiptProps) {
+  const isBookingMode = Boolean(onConfirm || isBooking);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [hospital, setHospital] = React.useState(propHospital);
   const [dataLoaded, setDataLoaded] = React.useState(false);
@@ -414,6 +416,8 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
   const [triggerWhatsApp, setTriggerWhatsApp] = React.useState(false);
   const [isWhatsAppSending, setIsWhatsAppSending] = React.useState(false);
   const [autoWhatsApp, setAutoWhatsApp] = React.useState(() => {
+    // Strictly only enable auto WhatsApp when booking a new appointment (never in history / reprint)
+    if (!isBookingMode) return false;
     if (typeof window !== 'undefined') {
       return localStorage.getItem('msc_auto_whatsapp') === 'true';
     }
@@ -446,13 +450,7 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
         setIsConfirming(false);
       }
     } else {
-      if (autoWhatsApp && whatsAppButtonRef.current && patient.mobile) {
-        try {
-          await whatsAppButtonRef.current.send();
-        } catch (e) {
-          console.warn("[Auto WhatsApp] Receipt send error:", e);
-        }
-      }
+      // Re-print / History mode: ONLY print to paper. NEVER trigger WhatsApp automatically!
       if (iframeRef.current && iframeRef.current.contentWindow) {
         iframeRef.current.contentWindow.print();
       }
@@ -516,16 +514,18 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
                 <span>Header & Footer</span>
               </label>
 
-              {/* Auto WhatsApp Toggle in Toolbar */}
-              <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 cursor-pointer text-[10px] font-bold uppercase tracking-wider text-slate-600 transition-all select-none">
-                <input
-                  type="checkbox"
-                  checked={autoWhatsApp}
-                  onChange={(e) => handleToggleAutoWhatsApp(e.target.checked)}
-                  className="cursor-pointer w-3.5 h-3.5 accent-[#25D366]"
-                />
-                <span className={autoWhatsApp ? 'text-teal-700 font-black' : ''}>Auto WhatsApp</span>
-              </label>
+              {/* Auto WhatsApp Toggle in Toolbar - strictly only visible during appointment booking */}
+              {isBookingMode && (
+                <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 cursor-pointer text-[10px] font-bold uppercase tracking-wider text-slate-600 transition-all select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoWhatsApp}
+                    onChange={(e) => handleToggleAutoWhatsApp(e.target.checked)}
+                    className="cursor-pointer w-3.5 h-3.5 accent-[#25D366]"
+                  />
+                  <span className={autoWhatsApp ? 'text-teal-700 font-black' : ''}>Auto WhatsApp</span>
+                </label>
+              )}
 
               {hasGuardianData && (
                 <button
@@ -590,7 +590,7 @@ Thank you for choosing ${hospital.name}. Stay Healthy.`;
                       phoneNumber={patient.mobile}
                       documentName={isLab ? `Lab_Receipt_${fullPatientName.replace(/\s+/g, '_')}.pdf` : `Appointment_Receipt_${fullPatientName.replace(/\s+/g, '_')}.pdf`}
                       showCheckbox={false}
-                      autoSend={autoWhatsApp}
+                      autoSend={isBookingMode && autoWhatsApp}
                       onAutoSendChange={handleToggleAutoWhatsApp}
                       triggerSend={triggerWhatsApp}
                       onSendingChange={setIsWhatsAppSending}
