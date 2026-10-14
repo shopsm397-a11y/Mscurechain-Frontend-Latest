@@ -353,10 +353,16 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
               .print-table > tbody > tr { page-break-inside: auto !important; }
               .print-table > tbody > tr > td { page-break-inside: auto !important; }
               .data-grid tr, .payment-table tr, .vitals-grid tr { page-break-inside: avoid !important; }
+              ${receiptFormat === 'detailed_bill' ? `
               .header-wrapper { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; background: white !important; z-index: 1000 !important; }
               .footer-wrapper { position: fixed !important; bottom: 0 !important; left: 0 !important; right: 0 !important; background: white !important; z-index: 1000 !important; }
               .print-header-spacer { margin-bottom: 0 !important; height: 135px !important; }
               .print-footer-spacer { margin-top: 0 !important; height: 125px !important; }
+              ` : `
+              .header-wrapper { position: relative !important; top: auto !important; left: auto !important; right: auto !important; width: 100% !important; page-break-inside: avoid !important; }
+              .footer-wrapper { position: fixed !important; bottom: 0 !important; left: 0 !important; right: 0 !important; width: 100% !important; padding: 0 5mm !important; box-sizing: border-box !important; background: white !important; z-index: 1000 !important; page-break-inside: avoid !important; }
+              .print-header-spacer, .print-footer-spacer, .footer-spacer { display: none !important; height: 0 !important; }
+              `}
             }
           </style>
         </head>`);
@@ -380,6 +386,16 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
         doc.open();
         doc.write(docWithScript);
         doc.close();
+
+        // Adjust iframe height to content to prevent huge blank void in modal preview
+        setTimeout(() => {
+          if (iframeRef.current && iframeRef.current.contentDocument) {
+            const scrollH = iframeRef.current.contentDocument.body.scrollHeight;
+            if (scrollH > 100) {
+              iframeRef.current.style.height = `${scrollH + 20}px`;
+            }
+          }
+        }, 150);
 
         if (shouldPrintAfterUpdate) {
             setShouldPrintAfterUpdate(false);
@@ -627,7 +643,7 @@ Thank you for choosing ${hospital.name}. Stay Healthy.`;
           <iframe
             ref={iframeRef}
             className="bg-white w-full sm:w-[210mm] shrink-0 origin-top transform transition-all duration-300 scale-[1] mb-10 shadow-none border-none"
-            style={{ minHeight: '1200px', height: 'auto' }}
+            style={{ minHeight: '600px', height: 'auto' }}
             title="Receipt Preview"
           />
         </div>
