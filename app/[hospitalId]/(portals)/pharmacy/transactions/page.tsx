@@ -35,7 +35,7 @@ import { useAuthStore } from '@/stores/authStore';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { PharmacyDashboardService, PharmacyDashboardStats } from '@/lib/integrations/services/pharmacyDashboard.service';
-import { formatPatientNameWithPrefix, formatPatientDisplayName } from '@/lib/utils/name-utils';
+import { formatPatientNameWithPrefix, formatPatientDisplayName, getHospitalHonorificOptions, getHospitalHonorificItems, addHospitalCustomHonorific, cleanHonorificPrefix } from '@/lib/utils/name-utils';
 
 const TransactionsPage = () => {
     const { user } = useAuthStore();
@@ -75,7 +75,7 @@ const TransactionsPage = () => {
     const handleOpenEditPatient = (bill: PharmacyBill) => {
         setEditForm({
             patientName: bill.patientName || '',
-            honorific: (bill as any).honorific || '',
+            honorific: cleanHonorificPrefix((bill as any).honorific || ''),
             customerPhone: bill.customerPhone && bill.customerPhone !== '-' ? bill.customerPhone : '',
             patientAddress: bill.patientAddress || '',
             patientType: bill.patientType || 'OPD',
@@ -95,14 +95,18 @@ const TransactionsPage = () => {
 
         setIsSavingPatient(true);
         try {
-            const res = await PharmacyBillingService.updateInvoicePatient(selectedBill._id, editForm);
+            const cleanHon = cleanHonorificPrefix(editForm.honorific);
+            const res = await PharmacyBillingService.updateInvoicePatient(selectedBill._id, {
+                ...editForm,
+                honorific: cleanHon,
+            });
             if (res && res.success !== false) {
                 toast.success('Patient details updated on bill!');
 
                 const updated: PharmacyBill = {
                     ...selectedBill,
                     patientName: editForm.patientName.trim(),
-                    honorific: editForm.honorific.trim(),
+                    honorific: cleanHon,
                     customerPhone: editForm.customerPhone.trim() || '-',
                     patientAddress: editForm.patientAddress.trim(),
                     patientType: editForm.patientType.trim(),
@@ -980,20 +984,32 @@ Thank you for choosing ${hospName}. Stay Healthy.`;
                                 </label>
                                 <div className="grid grid-cols-4 gap-2">
                                     <select
-                                        value={editForm.honorific}
-                                        onChange={(e) => setEditForm(prev => ({ ...prev, honorific: e.target.value }))}
-                                        className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs font-bold text-slate-800 bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                                        value={cleanHonorificPrefix(editForm.honorific)}
+                                        onChange={(e) => {
+                                            if (e.target.value === '__ADD_CUSTOM__') {
+                                                const customVal = window.prompt("Enter Custom Prefix / Honorific for this hospital:");
+                                                if (customVal && customVal.trim()) {
+                                                    const added = cleanHonorificPrefix(customVal.trim().toUpperCase());
+                                                    addHospitalCustomHonorific(added, hospitalId);
+                                                    setEditForm(prev => ({ ...prev, honorific: added }));
+                                                    toast.success(`Custom prefix "${added}" added for this hospital`);
+                                                }
+                                            } else {
+                                                setEditForm(prev => ({ ...prev, honorific: cleanHonorificPrefix(e.target.value) }));
+                                            }
+                                        }}
+                                        className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs font-bold text-slate-800 bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none cursor-pointer"
                                     >
                                         <option value="">Title</option>
-                                        <option value="Mr.">Mr.</option>
-                                        <option value="Mrs.">Mrs.</option>
-                                        <option value="Ms.">Ms.</option>
-                                        <option value="Miss">Miss</option>
-                                        <option value="Master">Master</option>
-                                        <option value="Baby">Baby</option>
-                                        <option value="Baby of">Baby of</option>
-                                        <option value="Dr.">Dr.</option>
-                                        <option value="Prof.">Prof.</option>
+                                        {getHospitalHonorificItems(hospitalId).map((opt) => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                        {editForm.honorific && !getHospitalHonorificItems(hospitalId).some(h => h.value.toLowerCase() === editForm.honorific.toLowerCase()) && (
+                                            <option value={cleanHonorificPrefix(editForm.honorific)}>{cleanHonorificPrefix(editForm.honorific).toUpperCase()}</option>
+                                        )}
+                                        <option value="__ADD_CUSTOM__" className="font-bold text-teal-600">
+                                            + Add Custom...
+                                        </option>
                                     </select>
                                     <input
                                         type="text"

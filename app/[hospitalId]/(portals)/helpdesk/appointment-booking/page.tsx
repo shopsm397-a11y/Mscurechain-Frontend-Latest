@@ -29,7 +29,7 @@ import {
     Trash2,
     RotateCcw
 } from "lucide-react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams, useParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { helpdeskService, ipdService } from "@/lib/integrations";
 import type { HelpdeskDoctor, HelpdeskProfile, Bed } from "@/lib/integrations/types";
@@ -40,12 +40,14 @@ import MainHeader from '@/components/printers/MainHeader';
 import MainFooter from '@/components/printers/MainFooter';
 import { hospitalAdminService } from '@/lib/integrations/services/hospitalAdmin.service';
 import { generateClinicalReceiptHtml, computeAgeFromDob } from "@/lib/print-utils";
-import { formatDoctorName, formatPatientNameWithPrefix, GUARDIAN_RELATIONS, HONORIFIC_OPTIONS } from "@/lib/utils/name-utils";
+import { formatDoctorName, formatPatientNameWithPrefix, GUARDIAN_RELATIONS, HONORIFIC_OPTIONS, getHospitalHonorificOptions, getHospitalHonorificItems, addHospitalCustomHonorific, cleanHonorificPrefix } from "@/lib/utils/name-utils";
 import ClinicalReceipt from "@/components/helpdesk/ClinicalReceipt";
 
 export default function AppointmentBooking() {
     const router = useRouter();
     const searchParams = useSearchParams() as any;
+    const routeParams = useParams();
+    const hospitalId = (routeParams?.hospitalId as string) || '';
     const patientIdFromQuery = ((searchParams?.get('patientId') ?? null) ?? null);
     const editAppointmentId = ((searchParams?.get('editId') ?? searchParams?.get('appointmentId') ?? null) ?? null);
 
@@ -1739,14 +1741,32 @@ export default function AppointmentBooking() {
                                                 ) : (
                                                     <div className="flex items-center gap-2">
                                                         <select
-                                                            value={pendingHonorific === 'Mr' ? 'Mr.' : (pendingHonorific || '')}
-                                                            onChange={(e) => setPendingHonorific(e.target.value)}
-                                                            className="px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold uppercase focus:border-teal-500 outline-none"
+                                                            value={cleanHonorificPrefix(pendingHonorific)}
+                                                            onChange={(e) => {
+                                                                if (e.target.value === '__ADD_CUSTOM__') {
+                                                                    const customVal = window.prompt("Enter Custom Prefix / Honorific for this hospital:");
+                                                                    if (customVal && customVal.trim()) {
+                                                                        const added = cleanHonorificPrefix(customVal.trim().toUpperCase());
+                                                                        addHospitalCustomHonorific(added, hospitalId);
+                                                                        setPendingHonorific(added);
+                                                                        toast.success(`Custom prefix "${added}" saved for this hospital`);
+                                                                    }
+                                                                } else {
+                                                                    setPendingHonorific(cleanHonorificPrefix(e.target.value));
+                                                                }
+                                                            }}
+                                                            className="px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold uppercase focus:border-teal-500 outline-none cursor-pointer"
                                                         >
                                                             <option value="">None / Not Set</option>
-                                                            {HONORIFIC_OPTIONS.map((h) => (
-                                                                <option key={h} value={h}>{h}</option>
+                                                            {getHospitalHonorificItems(hospitalId).map((item) => (
+                                                                <option key={item.value} value={item.value}>{item.label}</option>
                                                             ))}
+                                                            {pendingHonorific && !getHospitalHonorificItems(hospitalId).some(h => h.value.toLowerCase() === pendingHonorific.toLowerCase()) && (
+                                                                <option value={cleanHonorificPrefix(pendingHonorific)}>{cleanHonorificPrefix(pendingHonorific).toUpperCase()}</option>
+                                                            )}
+                                                            <option value="__ADD_CUSTOM__" className="font-bold text-teal-600">
+                                                                + Add Custom...
+                                                            </option>
                                                         </select>
                                                         <button
                                                             type="button"
