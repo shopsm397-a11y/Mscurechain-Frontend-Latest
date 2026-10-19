@@ -36,6 +36,16 @@ interface QueueProps {
   setVisitTypeFilter: (type: 'all' | 'opd' | 'ipd') => void;
 }
 
+const getLocalDateStr = (dInput: any) => {
+  if (!dInput) return '';
+  const d = new Date(dInput);
+  if (isNaN(d.getTime())) return '';
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTypeFilter, setVisitTypeFilter }: QueueProps) {
    const router = useRouter();
   const [showQueue, setShowQueue] = useState(true);
@@ -48,16 +58,8 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
     consultationsValue: 0
   });
   const [appointmentToDelete, setAppointmentToDelete] = useState<string | null>(null);
-  const [startDateFilter, setStartDateFilter] = useState<string>(() => {
-    const today = new Date();
-    today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
-    return today.toISOString().split('T')[0];
-  });
-  const [endDateFilter, setEndDateFilter] = useState<string>(() => {
-    const today = new Date();
-    today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
-    return today.toISOString().split('T')[0];
-  });
+  const [startDateFilter, setStartDateFilter] = useState<string>(() => getLocalDateStr(new Date()));
+  const [endDateFilter, setEndDateFilter] = useState<string>(() => getLocalDateStr(new Date()));
 
   const fetchDoctorProfile = useCallback(async () => {
     try {
@@ -133,8 +135,7 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
   }, [fetchAppointments]);
 
   const todayObj = new Date();
-  todayObj.setMinutes(todayObj.getMinutes() - todayObj.getTimezoneOffset());
-  const todayStr = todayObj.toISOString().split('T')[0];
+  const todayStr = getLocalDateStr(todayObj);
 
   // Filter: Show active waiting appointments. 
   // Online bookings with status 'scheduled' are awaiting Frontdesk Check-In and do not clutter doctor queue.
@@ -142,30 +143,24 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
     const status = apt.status?.toLowerCase();
     const isExcluded = status === 'completed' || status === 'cancelled' || (apt as any).isPaused === true || (apt.type?.toLowerCase() === 'online' && status === 'scheduled');
     
+    if (isExcluded) return false;
+
     // Filter by Visit Type
     if (visitTypeFilter !== 'all') {
       const type = (apt.type || 'opd').toLowerCase();
       if (visitTypeFilter === 'opd') {
-        if (!(type === 'opd' || type === 'consultation')) return false;
+        if (!(type === 'opd' || type === 'consultation' || type === 'app' || type === 'routine')) return false;
       } else if (type !== visitTypeFilter) {
         return false;
       }
     }
 
-    // Filter by Date Range
-    const effectiveStart = startDateFilter || todayStr;
-    const effectiveEnd = endDateFilter || todayStr;
+    // Filter strictly by Date Range
+    const aptDateStr = getLocalDateStr(apt.date || apt.createdAt);
+    if (startDateFilter && aptDateStr && aptDateStr < startDateFilter) return false;
+    if (endDateFilter && aptDateStr && aptDateStr > endDateFilter) return false;
     
-    const aptDateStr = apt.date ? new Date(apt.date).toISOString().split('T')[0] : '';
-    if (!aptDateStr) return false;
-    
-    let isValid = true;
-    if (effectiveStart && aptDateStr < effectiveStart) isValid = false;
-    if (effectiveEnd && aptDateStr > effectiveEnd) isValid = false;
-    
-    if (!isValid) return false;
-    
-    return !isExcluded;
+    return true;
   });
 
   console.log('[Queue] Total appointments:', appointments.length);
@@ -175,6 +170,21 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
   const sortedAppointments = [...queueAppointments].sort((a, b) => {
     return new Date(a.createdAt || a.date || 0).getTime() - new Date(b.createdAt || b.date || 0).getTime();
   });
+
+  const formatTokenNumber = (token: any, fallbackIdx: number) => {
+    if (token !== undefined && token !== null && token !== '') {
+      const str = String(token).trim();
+      // If token is an MRN or ID (e.g. starts with HH or length > 4), fall back to queue position
+      if (!str.toUpperCase().startsWith('HH') && str.length <= 4) {
+        const num = parseInt(str, 10);
+        if (!isNaN(num)) {
+          return `#${String(num).padStart(2, '0')}`;
+        }
+        return str.startsWith('#') ? str : `#${str}`;
+      }
+    }
+    return `#${String(fallbackIdx + 1).padStart(2, '0')}`;
+  };
 
   // Socket Integration
   const { user } = useAuthStore() || {}; // Corrected hook call
@@ -219,18 +229,17 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
   }, [user]);
 
   // Determine dynamic label inside the render so it can be used for the title
-  let dynamicLabel = "Today's";
-  
-  // If dates are cleared, default to today
-  const effectiveStart = startDateFilter || todayStr;
-  const effectiveEnd = endDateFilter || todayStr;
-
-  if (effectiveStart !== todayStr || effectiveEnd !== todayStr) {
-      if (effectiveStart === effectiveEnd) {
-          dynamicLabel = effectiveStart.split('-').reverse().join('-');
-      } else {
-          dynamicLabel = `${effectiveStart.split('-').reverse().join('-')} TO ${effectiveEnd.split('-').reverse().join('-')}`;
-      }
+  let dynamicLabel = "Today";
+  if (startDateFilter || endDateFilter) {
+    if (startDateFilter === endDateFilter) {
+      dynamicLabel = startDateFilter === todayStr ? "Today" : startDateFilter.split('-').reverse().join('-');
+    } else {
+      const s = startDateFilter ? startDateFilter.split('-').reverse().join('-') : 'Earliest';
+      const e = endDateFilter ? endDateFilter.split('-').reverse().join('-') : 'Latest';
+      dynamicLabel = `${s} to ${e}`;
+    }
+  } else {
+    dynamicLabel = "All Time";
   }
 
   // Notify parent of stats changes
@@ -241,19 +250,16 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
         if (visitTypeFilter !== 'all') {
           const type = (apt.type || 'opd').toLowerCase();
           if (visitTypeFilter === 'opd') {
-            if (!(type === 'opd' || type === 'consultation')) return false;
+            if (!(type === 'opd' || type === 'consultation' || type === 'app' || type === 'routine')) return false;
           } else if (type !== visitTypeFilter) {
             return false;
           }
         }
 
-        // Filter by Date Range
-        const aptDateStr = apt.date ? new Date(apt.date).toISOString().split('T')[0] : '';
-        if (!aptDateStr) return false;
-        let isValid = true;
-        if (effectiveStart && aptDateStr < effectiveStart) isValid = false;
-        if (effectiveEnd && aptDateStr > effectiveEnd) isValid = false;
-        if (!isValid) return false;
+        // Filter strictly by Date Range
+        const aptDateStr = getLocalDateStr(apt.date || apt.createdAt);
+        if (startDateFilter && aptDateStr && aptDateStr < startDateFilter) return false;
+        if (endDateFilter && aptDateStr && aptDateStr > endDateFilter) return false;
 
         return true;
     });
@@ -292,7 +298,11 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
         <div className="flex items-center justify-between w-full lg:w-auto">
           <div>
             <h2 className="text-xs sm:text-sm md:text-base font-black text-foreground dark:text-foreground uppercase tracking-tight leading-tight">
-              {effectiveStart === todayStr && effectiveEnd === todayStr ? "Schedule Today" : `Schedule: ${dynamicLabel}`}
+              {startDateFilter === todayStr && endDateFilter === todayStr 
+                ? "Schedule Today" 
+                : !startDateFilter && !endDateFilter 
+                  ? "All Appointments" 
+                  : `Schedule: ${dynamicLabel}`}
             </h2>
             <p className="text-[9px] sm:text-[10px] text-muted mt-0.5 font-bold uppercase tracking-widest opacity-70">
               {showQueue ? (
@@ -361,18 +371,13 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
               </div>
 
               <div className="flex items-center gap-2 ml-auto">
-                {(() => {
-                    return (effectiveStart !== todayStr || effectiveEnd !== todayStr);
-                })() && (
+                {(startDateFilter !== todayStr || endDateFilter !== todayStr) && (
                   <button 
                     onClick={() => {
-                      const today = new Date();
-                      today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
-                      const todayStr = today.toISOString().split('T')[0];
                       setStartDateFilter(todayStr);
                       setEndDateFilter(todayStr);
                     }} 
-                    className="text-[9px] text-primary-theme font-black uppercase bg-primary-theme/10 px-3 py-1 rounded-lg hover:bg-primary-theme/20 transition-colors whitespace-nowrap"
+                    className="text-[9px] text-primary-theme font-black uppercase bg-primary-theme/10 px-3 py-1 rounded-lg hover:bg-primary-theme/20 transition-colors whitespace-nowrap cursor-pointer"
                   >
                     Today
                   </button>
@@ -380,7 +385,7 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
                 {(startDateFilter || endDateFilter) ? (
                   <button 
                     onClick={() => { setStartDateFilter(''); setEndDateFilter(''); }}
-                    className="text-[9px] text-rose-500 font-black uppercase bg-rose-50 px-3 py-1 rounded-lg hover:bg-rose-100 transition-colors whitespace-nowrap"
+                    className="text-[9px] text-rose-500 font-black uppercase bg-rose-50 px-3 py-1 rounded-lg hover:bg-rose-100 transition-colors whitespace-nowrap cursor-pointer"
                   >
                     Clear
                   </button>
@@ -452,7 +457,7 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
                     <div className="hidden sm:grid grid-cols-12 items-center gap-4 p-4 bg-secondary-theme dark:bg-secondary-theme rounded-xl hover:opacity-100 transition-all border border-transparent hover:border-primary-theme/20 hover:shadow-md group">
                       <div className="col-span-1 flex flex-col items-center justify-center">
                         <div className="shrink-0 w-8 h-8 lg:w-10 lg:h-10 bg-primary-theme rounded-xl flex items-center justify-center text-primary-theme-foreground font-black text-xs shadow-sm">
-                          {(apt as any).token_number ? `#${String((apt as any).token_number).padStart(2, '0')}` : `#${idx + 1}`}
+                          {formatTokenNumber((apt as any).token_number, idx)}
                         </div>
                         <span className="text-[8px] font-black uppercase tracking-tight text-muted mt-0.5">TOKEN</span>
                       </div>
@@ -519,7 +524,7 @@ function AppointmentsQueueDynamic({ onStatsChange, consultationDuration, visitTy
                       <div className="flex items-start justify-between">
                         <div className="flex items-start gap-2.5 min-w-0 pr-2">
                           <div className="shrink-0 w-8 h-8 bg-primary-theme rounded-xl flex items-center justify-center text-primary-theme-foreground font-black text-[11px] shadow-xs">
-                            {(apt as any).token_number ? `#${(apt as any).token_number}` : `#${idx + 1}`}
+                            {formatTokenNumber((apt as any).token_number, idx)}
                           </div>
                           <div className="min-w-0">
                             <p className="text-[12px] font-black text-foreground truncate">{apt.patientName}</p>
