@@ -106,13 +106,27 @@ export const getPatientHonorific = (tx: any): string => {
     return honorific;
 };
 
-export const getPatientNameWithPrefix = (tx: any, honorificMap?: Map<string, string>) => {
-    const rawPatientName = tx.patientName || tx.patient?.name || tx.patientDetails?.name || tx.referenceId?.patientName || tx.referenceId?.name || "Unknown";
+export const getPatientNameWithPrefix = (
+    tx: any, 
+    honorificMap?: Map<string, string>,
+    canonicalNameMap?: Map<string, string>
+) => {
+    let rawPatientName = tx.user?.name || tx.patient?.name || tx.patientDetails?.originalPatientName || tx.patientName || tx.patientDetails?.name || tx.referenceId?.patientName || tx.referenceId?.name || "Unknown";
+    
+    const mrn = (tx.patientMRN || tx.mrn || tx.referenceId?.mrn || tx.user?.mrn || '').toUpperCase().trim();
+    const mob = (tx.patientMobile || tx.mobile || tx.referenceId?.mobile || tx.user?.mobile || '').trim();
+    const pId = (tx.patientId || tx.patient?._id || (typeof tx.patient === 'string' ? tx.patient : '') || tx.user?._id || (typeof tx.user === 'string' ? tx.user : '') || '').toString().trim();
+
+    if (canonicalNameMap) {
+        const canonical = (mrn && canonicalNameMap.get(mrn)) || (mob && canonicalNameMap.get(mob)) || (pId && canonicalNameMap.get(pId));
+        if (canonical && canonical.toUpperCase() !== 'UNKNOWN' && canonical.toUpperCase() !== 'UNNAMED PATIENT' && canonical.toUpperCase() !== 'UNKNOWN PATIENT') {
+            rawPatientName = canonical;
+        }
+    }
+
     let honorific = getPatientHonorific(tx);
 
     const cleanName = cleanPatientName(rawPatientName).toUpperCase();
-    const mrn = (tx.patientMRN || tx.mrn || tx.referenceId?.mrn || '').toUpperCase().trim();
-    const mob = (tx.patientMobile || tx.mobile || tx.referenceId?.mobile || '').trim();
 
     if (!honorific && honorificMap) {
         honorific = honorificMap.get(cleanName) || (mrn ? honorificMap.get(mrn) : '') || (mob ? honorificMap.get(mob) : '') || '';
@@ -305,6 +319,50 @@ export default function TransactionsPage() {
         return map;
     }, [transactions]);
 
+    const patientCanonicalNameMap = useMemo(() => {
+        const map = new Map<string, string>();
+        
+        // Pass 1: Identify canonical registered names (from tx.user, tx.patient, or IPD/Lab records with legal registered name)
+        transactions.forEach((tx: any) => {
+            const rawType = (tx.type || '').toLowerCase();
+            const isIpdOrLab = rawType.includes('ipd') || rawType.includes('discharge') || rawType.includes('lab');
+            
+            const candidateName = cleanPatientName(
+                tx.user?.name || 
+                tx.patient?.name || 
+                tx.patientDetails?.originalPatientName || 
+                (isIpdOrLab ? (tx.patientName || tx.patientDetails?.name) : '') ||
+                ''
+            ).trim();
+
+            if (candidateName && candidateName.toUpperCase() !== 'UNKNOWN' && candidateName.toUpperCase() !== 'UNNAMED PATIENT' && candidateName.toUpperCase() !== 'UNKNOWN PATIENT') {
+                const mrn = (tx.patientMRN || tx.mrn || tx.referenceId?.mrn || tx.user?.mrn || '').toUpperCase().trim();
+                const mob = (tx.patientMobile || tx.mobile || tx.referenceId?.mobile || tx.user?.mobile || '').trim();
+                const pId = (tx.patientId || tx.patient?._id || (typeof tx.patient === 'string' ? tx.patient : '') || tx.user?._id || (typeof tx.user === 'string' ? tx.user : '') || '').toString().trim();
+
+                if (mrn && mrn !== 'N/A' && mrn !== '-') map.set(mrn, candidateName);
+                if (mob && mob.length >= 10) map.set(mob, candidateName);
+                if (pId && pId.length === 24) map.set(pId, candidateName);
+            }
+        });
+
+        // Pass 2: Fallback for any other transactions with non-empty valid patient name
+        transactions.forEach((tx: any) => {
+            const candidateName = cleanPatientName(tx.patientName || tx.patientDetails?.name || '').trim();
+            if (candidateName && candidateName.toUpperCase() !== 'UNKNOWN' && candidateName.toUpperCase() !== 'UNNAMED PATIENT' && candidateName.toUpperCase() !== 'UNKNOWN PATIENT') {
+                const mrn = (tx.patientMRN || tx.mrn || tx.referenceId?.mrn || tx.user?.mrn || '').toUpperCase().trim();
+                const mob = (tx.patientMobile || tx.mobile || tx.referenceId?.mobile || tx.user?.mobile || '').trim();
+                const pId = (tx.patientId || tx.patient?._id || (typeof tx.patient === 'string' ? tx.patient : '') || tx.user?._id || (typeof tx.user === 'string' ? tx.user : '') || '').toString().trim();
+
+                if (mrn && mrn !== 'N/A' && mrn !== '-' && !map.has(mrn)) map.set(mrn, candidateName);
+                if (mob && mob.length >= 10 && !map.has(mob)) map.set(mob, candidateName);
+                if (pId && pId.length === 24 && !map.has(pId)) map.set(pId, candidateName);
+            }
+        });
+
+        return map;
+    }, [transactions]);
+
     const handleExport = async (range: "daily" | "weekly" | "monthly" | "all") => {
         try {
             setExporting(true);
@@ -403,7 +461,7 @@ export default function TransactionsPage() {
 
                 const row = worksheet.addRow({
                     date: formattedDate,
-                    patient: getPatientNameWithPrefix(tx, patientHonorificMap),
+                    patient: getPatientNameWithPrefix(tx, patientHonorificMap, patientCanonicalNameMap),
                     mobile: tx.patientMobile || tx.mobile || "N/A",
                     type: serviceType,
                     amount: tx.amount || 0,
@@ -844,11 +902,7 @@ export default function TransactionsPage() {
         if (!win) { toast.error('Please allow popups to print'); return; }
 
         const h = hospital || {};
-        const honorific = tx.patient?.honorific || tx.patient?.profile?.honorific || tx.referenceId?.honorific || tx.referenceId?.patientHonorific || tx.honorific || tx.patientPrefix || tx.patientDetails?.honorific || "";
-        const rawPatientName = tx.patientName || tx.patient?.name || tx.referenceId?.patientName || "Unknown";
-        const upHonorific = honorific ? honorific.toUpperCase() : "";
-        const prefixStr = ["MR", "MRS", "MS", "DR"].includes(upHonorific) ? `${upHonorific}.` : upHonorific;
-        const patientName = `${prefixStr} ${rawPatientName}`.trim().toUpperCase();
+        const patientName = getPatientNameWithPrefix(tx, patientHonorificMap, patientCanonicalNameMap);
         
         const pAge = tx.patientDetails?.age || tx.patientId?.age || tx.patient?.age || tx.patient?.profile?.age;
         const pDob = tx.patientDetails?.dateOfBirth || tx.patientId?.dateOfBirth || tx.patient?.dob || tx.patient?.profile?.dob;
@@ -1050,7 +1104,7 @@ export default function TransactionsPage() {
         const tabLabel = typeFilter === 'ipd' ? 'IPD Payments' : typeFilter === 'lab' ? 'Lab Payments' : 'OPD Payments';
         const rows = filteredTransactions.map((tx: any) => {
             const amount = tx.payment?.amount || tx.amount || 0;
-            const patientName = getPatientNameWithPrefix(tx, patientHonorificMap);
+            const patientName = getPatientNameWithPrefix(tx, patientHonorificMap, patientCanonicalNameMap);
             const rawType = tx.type || 'appointment_booking';
             const typeMapping: Record<string, string> = {
                 'appointment_booking': 'OPD', 'opd': 'OPD',
@@ -1382,7 +1436,7 @@ export default function TransactionsPage() {
                                     const status = (rawStatus.toLowerCase() === 'paid' || rawStatus.toLowerCase() === 'completed' || appointmentPaid) ? 'completed' : 'pending';
 
                                     const rawType = tx.type || "appointment_booking";
-                                    const patientName = getPatientNameWithPrefix(tx, patientHonorificMap);
+                                    const patientName = getPatientNameWithPrefix(tx, patientHonorificMap, patientCanonicalNameMap);
 
                                     // Map transaction type to human-readable format
                                     const typeMapping: Record<string, string> = {
@@ -1712,8 +1766,8 @@ export default function TransactionsPage() {
                         isLab={isLabTx}
                         labTests={labTestsList}
                         patient={{
-                            name: getPatientNameWithPrefix(previewTx, patientHonorificMap),
-                            honorific: getPatientHonorific(previewTx) || patientHonorificMap.get(cleanPatientName(previewTx.patientName || '').toUpperCase()) || '',
+                            name: fullPatient?.name || fullPatient?.user?.name || getPatientNameWithPrefix(previewTx, patientHonorificMap, patientCanonicalNameMap),
+                            honorific: fullPatient?.honorific || fullPatient?.profile?.honorific || getPatientHonorific(previewTx) || patientHonorificMap.get(cleanPatientName(previewTx.patientName || '').toUpperCase()) || '',
                             mrn: resolvedMrn,
                             mobile: previewTx.patientMobile || previewTx.mobile || previewTx.patientDetails?.mobile || previewTx.patient?.mobile || activePatient?.mobile || '',
                             age: previewTx.patientDetails?.age || previewTx.patient?.age || activePatient?.age || '',

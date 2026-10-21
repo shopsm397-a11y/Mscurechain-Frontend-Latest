@@ -1030,6 +1030,22 @@
         return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     };
 
+    const formatISTTime = (dateInput?: string | Date | null) => {
+        if (!dateInput) return null;
+        try {
+            const d = new Date(dateInput);
+            if (isNaN(d.getTime())) return null;
+            return new Intl.DateTimeFormat('en-IN', {
+                timeZone: 'Asia/Kolkata',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+            }).format(d);
+        } catch {
+            return null;
+        }
+    };
+
     useEffect(() => {
         if (!appointmentData?.consultationStartTime || appointmentData.status !== 'in-progress' || appointmentData.isPaused) return;
         const start = new Date(appointmentData.consultationStartTime).getTime();
@@ -3227,9 +3243,21 @@ Thank you for choosing ${hospName}. Stay Healthy.`;
                         {/* Session Timer & End Controls Group */}
                         {appointmentId && (
                             <div className="flex items-center gap-1.5 bg-gray-900 dark:bg-black p-1 rounded-lg border border-gray-800 shadow-sm shrink-0">
-                                <div className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-gray-800 font-mono text-[10px] font-black text-emerald-400 border border-gray-700">
-                                    <Clock size={10} className="animate-pulse text-emerald-400" />
-                                    <span>{formatTime(elapsedTime)}</span>
+                                <div className="flex flex-col justify-center px-2 py-1 rounded-md bg-gray-800 font-mono border border-gray-700">
+                                    <div className="flex items-center gap-1 text-[11px] font-black text-emerald-400">
+                                        <Clock size={11} className="animate-pulse text-emerald-400" />
+                                        <span>{formatTime(elapsedTime)}</span>
+                                    </div>
+                                    {appointmentData?.consultationStartTime && (
+                                        <span className="text-[8px] font-sans font-bold text-gray-300 tracking-wider">
+                                            Start: {formatISTTime(appointmentData.consultationStartTime)} IST
+                                        </span>
+                                    )}
+                                    {appointmentData?.consultationEndTime && (
+                                        <span className="text-[8px] font-sans font-bold text-emerald-400 tracking-wider">
+                                            End: {formatISTTime(appointmentData.consultationEndTime)} IST
+                                        </span>
+                                    )}
                                 </div>
                                 <button
                                     onClick={handlePauseConsultation}
