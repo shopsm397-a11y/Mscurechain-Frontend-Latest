@@ -41,6 +41,8 @@ import {
     useAppointments,
     useHelpdeskProfile
 } from "@/lib/integrations/hooks";
+import { useQueryClient } from "@tanstack/react-query";
+import { getSocket, joinSocketRoom } from "@/lib/integrations/api/socket";
 import { AttendanceModal } from "@/components/attendance/AttendanceModal";
 import { HelpdeskDashboardSkeleton } from "@/components/ui/skeletons";
 import { useAuthStore } from "@/stores/authStore";
@@ -255,6 +257,61 @@ function HelpdeskDashboard() {
         endDateFilter
     );
 
+    const queryClient = useQueryClient();
+
+    // ── Real-Time Socket Synchronization for Frontdesk Dashboard ───────────────
+    useEffect(() => {
+        let socketInstance: any = null;
+        let isCleanedUp = false;
+
+        const refreshAll = () => {
+            refetchDashboard();
+            queryClient.invalidateQueries({ queryKey: ['appointments'] });
+            queryClient.invalidateQueries({ queryKey: ['helpdesk-dashboard'] });
+        };
+
+        const setupSocket = async () => {
+            socketInstance = await getSocket();
+            if (!socketInstance || isCleanedUp) return;
+
+            if (hospitalId) {
+                joinSocketRoom({
+                    role: user?.role || 'helpdesk',
+                    userId: user?.id || (hospitalId as string),
+                    hospitalId: hospitalId as string,
+                });
+                socketInstance.emit('join_hospital', hospitalId);
+            }
+
+            socketInstance.on('queue_update', refreshAll);
+            socketInstance.on('consultation_started', refreshAll);
+            socketInstance.on('consultation_paused', refreshAll);
+            socketInstance.on('consultation_resumed', refreshAll);
+            socketInstance.on('appointment_status_changed', refreshAll);
+            socketInstance.on('appointment:status_change', refreshAll);
+            socketInstance.on('dashboard:update', refreshAll);
+        };
+
+        setupSocket();
+
+        // 5s background polling guarantees status updates even if websocket is disconnected
+        const pollTimer = setInterval(refreshAll, 5000);
+
+        return () => {
+            isCleanedUp = true;
+            clearInterval(pollTimer);
+            if (socketInstance) {
+                socketInstance.off('queue_update', refreshAll);
+                socketInstance.off('consultation_started', refreshAll);
+                socketInstance.off('consultation_paused', refreshAll);
+                socketInstance.off('consultation_resumed', refreshAll);
+                socketInstance.off('appointment_status_changed', refreshAll);
+                socketInstance.off('appointment:status_change', refreshAll);
+                socketInstance.off('dashboard:update', refreshAll);
+            }
+        };
+    }, [hospitalId, refetchDashboard, queryClient]);
+
     const { data: doctorsData, isLoading: doctorsLoading, isPlaceholderData: isDoctorsPlaceholder } = useHelpdeskDoctors();
     const updateStatusMutation = useUpdateAppointmentStatus();
 
@@ -347,7 +404,7 @@ function HelpdeskDashboard() {
             list = list.filter((apt: any) => {
                 const type = apt.type?.toLowerCase() || 'opd';
                 if (visitTypeFilter === 'opd') {
-                    return type === 'opd' || type === 'consultation';
+                    return type === 'opd' || type === 'consultation' || type === 'online';
                 }
                 return type === visitTypeFilter.toLowerCase();
             });
@@ -356,7 +413,7 @@ function HelpdeskDashboard() {
         // 5. Filter by Source Channel (All / Online Web / App / Offline Walk-in)
         if (sourceFilter === 'online') {
             list = list.filter((apt: any) => 
-                (apt.type?.toLowerCase() === 'online' || apt.bookingChannel === 'website') && 
+                (apt.type?.toLowerCase() === 'online' || apt.bookingChannel === 'website' || apt.bookingChannel === 'online' || apt.source === 'online' || apt.source === 'website') && 
                 !apt.isMobile && 
                 apt.source !== 'app' && 
                 apt.bookingChannel !== 'app'
@@ -409,7 +466,7 @@ function HelpdeskDashboard() {
         ).length;
 
         const online = list.filter((a: any) => 
-            (a.type?.toLowerCase() === 'online' || a.bookingChannel === 'website') && 
+            (a.type?.toLowerCase() === 'online' || a.bookingChannel === 'website' || a.bookingChannel === 'online' || a.source === 'online' || a.source === 'website') && 
             !a.isMobile && 
             a.source !== 'app' && 
             a.bookingChannel !== 'app'

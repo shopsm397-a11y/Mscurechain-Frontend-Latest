@@ -930,24 +930,61 @@
     useEffect(() => {
         if (!appointmentId) return;
 
+        let isMounted = true;
+        const shouldBlock = () => !isSubmitted && !isPaused;
+
         // 1. Block browser refresh / tab close
         const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-            if (isSubmitted || isPaused) return;
+            if (!shouldBlock()) return;
             e.preventDefault();
             e.returnValue = 'You have an active consultation. Please Pause or Complete before leaving.';
         };
         window.addEventListener('beforeunload', handleBeforeUnload);
 
-        // 2. Intercept Next.js client-side navigation (pushState / replaceState)
+        // 2. Intercept link clicks before Next.js starts navigation & insertion effects
+        const handleAnchorClick = (e: MouseEvent) => {
+            if (!shouldBlock()) return;
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+
+            const target = (e.target as HTMLElement).closest('a');
+            if (!target) return;
+            if (target.target === '_blank') return;
+
+            const href = target.getAttribute('href');
+            if (href && !href.startsWith('#') && !href.startsWith('javascript:') && !href.includes('/prescription')) {
+                e.preventDefault();
+                e.stopPropagation();
+                pendingNavRef.current = href;
+                setTimeout(() => {
+                    if (isMounted) setShowNavWarn(true);
+                }, 0);
+            }
+        };
+        document.addEventListener('click', handleAnchorClick, true);
+
+        // 3. Intercept browser back/forward buttons
+        const handlePopState = () => {
+            if (shouldBlock()) {
+                history.pushState(null, '', window.location.href);
+                pendingNavRef.current = document.referrer || '/';
+                setTimeout(() => {
+                    if (isMounted) setShowNavWarn(true);
+                }, 0);
+            }
+        };
+        window.addEventListener('popstate', handlePopState);
+
+        // 4. Intercept Next.js client-side navigation (pushState / replaceState)
+        // Must defer setShowNavWarn via setTimeout to avoid "useInsertionEffect must not schedule updates"
         const origPush    = history.pushState.bind(history);
         const origReplace = history.replaceState.bind(history);
-
-        const shouldBlock = () => !isSubmitted && !isPaused;
 
         history.pushState = function (state, title, url) {
             if (shouldBlock() && url && !String(url).includes('/prescription')) {
                 pendingNavRef.current = String(url);
-                setShowNavWarn(true);
+                setTimeout(() => {
+                    if (isMounted) setShowNavWarn(true);
+                }, 0);
                 return;
             }
             origPush(state, title, url as string);
@@ -956,14 +993,19 @@
         history.replaceState = function (state, title, url) {
             if (shouldBlock() && url && !String(url).includes('/prescription')) {
                 pendingNavRef.current = String(url);
-                setShowNavWarn(true);
+                setTimeout(() => {
+                    if (isMounted) setShowNavWarn(true);
+                }, 0);
                 return;
             }
             origReplace(state, title, url as string);
         };
 
         return () => {
+            isMounted = false;
             window.removeEventListener('beforeunload', handleBeforeUnload);
+            document.removeEventListener('click', handleAnchorClick, true);
+            window.removeEventListener('popstate', handlePopState);
             history.pushState    = origPush;
             history.replaceState = origReplace;
         };
@@ -1774,6 +1816,7 @@ Thank you for choosing ${hospName}. Stay Healthy.`;
                 age: formData.age,
                 gender: formData.gender,
                 sendToPharma: sendToPharmaFlag,
+                finalize: !sendToPharmaFlag,
                 // Send structured dermatology supplement (only when filled)
                 dermatologyData: hasDermData ? {
                     lesionType: dermData.lesionType,
@@ -1856,6 +1899,15 @@ Thank you for choosing ${hospName}. Stay Healthy.`;
 
             // Clear local draft on successful save
             if (draftKey) localStorage.removeItem(draftKey);
+
+            // Automatically complete consultation on finalize if appointmentId is present
+            if (appointmentId && !sendToPharmaFlag) {
+                doctorService.endConsultation(appointmentId, {
+                    duration: 0,
+                    diagnosis: formData.diagnosis,
+                    clinicalNotes: formData.symptoms
+                }).catch(err => console.warn("Background endConsultation sync notice:", err));
+            }
 
             if (showSuccessModal) {
                 setShowSuccess(true);

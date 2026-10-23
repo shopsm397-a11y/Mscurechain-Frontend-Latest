@@ -47,10 +47,10 @@ export const generateDischargeSummaryHTML = (
     }
 ): string => {
     // 1. Dynamic Hospital Header Fallbacks
-    const hospName = hospital?.name || 'HORIZIN HOSPITAL';
-    const hospAddress = hospital?.address || 'MDR0379, RTC colony, Kadapa, YSR Kadapa, Andhra Pradesh';
-    const hospContact = hospital?.phone || hospital?.mobile || hospital?.contact || '9876543210';
-    const hospEmail = hospital?.email || 'harizon@gmail.com';
+    const hospName = hospital?.name || 'HOSPITAL';
+    const hospAddress = hospital?.address || '';
+    const hospContact = hospital?.phone || hospital?.mobile || hospital?.contact || '';
+    const hospEmail = hospital?.email || '';
 
     // 2. Dynamic Patient Data Extraction
     const patientName = formatPatientDisplayName(patient, admission) || 'PATIENT NAME';

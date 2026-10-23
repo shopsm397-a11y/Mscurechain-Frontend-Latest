@@ -193,11 +193,11 @@ export const generateTransactionReportHTML = (
                                 : '';
                             return [ageText, genderText].filter(Boolean).join(' / ') || 'N/A';
                         })()}</td></tr>
-                        <tr><td class="info-label">S/W/D</td><td>: ${patient?.profile?.GuardianName || patient?.profile?.guardianName || patient?.user?.guardianName || patient?.user?.GuardianName || patient?.guardianName || patient?.caregiverName || patient?.patientDetails?.guardianName || patient?.patientDetails?.GuardianName || ''}</td></tr>
+                        <tr><td class="info-label">S/W/D</td><td>: ${patient?.profile?.GuardianName || patient?.profile?.guardianName || patient?.GuardianName || patient?.guardianName || patient?.user?.guardianName || patient?.user?.GuardianName || patient?.caregiverName || patient?.patientDetails?.guardianName || patient?.patientDetails?.GuardianName || ''}</td></tr>
                         <tr><td class="info-label">Doctor</td><td>: ${formatDoctorName(admission?.doctorName || admission?.doctor?.name || fallbackDoctor || '')}</td></tr>
                         ${admission?.admissionDate ? `<tr><td class="info-label">Admission Dt</td><td>: ${formatDate(admission?.admissionDate)}</td></tr>` : ''}
                         <tr><td class="info-label">Organization</td><td>: ${admission?.organization || admission?.sponsorName || ''}</td></tr>
-                        <tr><td class="info-label">Patient Type</td><td>: ${(!admission || !reportData?.admissions?.length) ? 'OP Patient' : (admission?.type || admission?.admissionType || 'IPD')}</td></tr>
+                        <tr><td class="info-label">Patient Type</td><td>: ${(!admission || (!admission.admissionId && !admission.ipNo && !admission.status && !reportData?.admissions?.length)) ? 'OP Patient' : (admission?.type || admission?.admissionType || 'IPD')}</td></tr>
                         <tr><td class="info-label">Secondary Dr.</td><td>: ${admission?.secondaryDoctor?.name || admission?.secondaryDoctorName || ''}</td></tr>
                         <tr><td class="info-label">Address</td><td>: ${patient?.address || patient?.patientAddress || patient?.patientDetails?.address || patient?.profile?.address || ''}</td></tr>
                         <tr><td class="info-label">Referal By</td><td>: ${
