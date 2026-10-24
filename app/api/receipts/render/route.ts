@@ -7,6 +7,7 @@ import {
   generateLabReceiptHtml,
   generateLabReportHtml,
   generateAddBillsReceiptHtml,
+  parseSafeDate,
 } from "@/lib/print-utils";
 import { generateDischargeSummaryHTML } from "@/lib/utils/print-discharge-summary";
 import { generateTransactionReportHTML } from "@/lib/utils/print-transaction-report";
@@ -395,8 +396,9 @@ export async function POST(req: NextRequest) {
       const invoiceId = data.invoiceId || data.invoiceNo || (data.tokenNumber ? `OPD-${data.tokenNumber}` : `OPD-HHO${(data._id || "").slice(-6).toUpperCase()}`);
 
       const rawDate = data.date || data.createdAt || data.billDate || new Date();
-      const currentDate = new Date(rawDate).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-      const currentTime = new Date(rawDate).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+      const safeDate = parseSafeDate(rawDate) || new Date();
+      const currentDate = safeDate.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const currentTime = safeDate.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
 
       const patAge = patient.age || data.patientDetails?.age || "-";
       const patAgeUnit = patient.ageUnit || data.patientDetails?.ageUnit || "Years";

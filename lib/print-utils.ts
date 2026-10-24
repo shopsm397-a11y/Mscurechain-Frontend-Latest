@@ -2,10 +2,98 @@ import { usePrintStore } from '@/stores/printStore';
 import { formatDoctorName, formatPatientNameWithPrefix } from '@/lib/utils/name-utils';
 import { formatFrequency } from '@/lib/frequencyUtils';
 
+
+/**
+ * Safely parses any date string, Date object, or timestamp without throwing or producing Invalid Date.
+ * Properly handles Indian/UK DD/MM/YYYY and DD-MM-YYYY formats which standard new Date() fails on when Day > 12.
+ */
+export const parseSafeDate = (input: any): Date | null => {
+  if (!input) return null;
+  if (input instanceof Date) {
+    return isNaN(input.getTime()) ? null : input;
+  }
+  if (typeof input === 'number') {
+    const d = new Date(input);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (
+      !trimmed ||
+      trimmed === '-' ||
+      trimmed.toLowerCase() === 'n/a' ||
+      trimmed.toLowerCase() === 'invalid date' ||
+      trimmed.toLowerCase() === 'null' ||
+      trimmed.toLowerCase() === 'undefined'
+    ) {
+      return null;
+    }
+
+    // 1. Check DD/MM/YYYY or DD-MM-YYYY (e.g. "24/10/2026", "24-10-2026", "05/03/2025")
+    const ddmmyyyyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(.*)$/);
+    if (ddmmyyyyMatch) {
+      const day = parseInt(ddmmyyyyMatch[1], 10);
+      const month = parseInt(ddmmyyyyMatch[2], 10) - 1;
+      const year = parseInt(ddmmyyyyMatch[3], 10);
+      const timePart = ddmmyyyyMatch[4]?.trim();
+      const d = new Date(year, month, day);
+
+      if (timePart) {
+        const cleanTime = timePart.replace(/^,?\s*/, '');
+        const timeParsed = new Date(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')} ${cleanTime}`);
+        if (!isNaN(timeParsed.getTime())) return timeParsed;
+      }
+
+      if (!isNaN(d.getTime())) return d;
+    }
+
+    // 2. Check YYYY-MM-DD or YYYY/MM/DD (e.g. "2026-10-24", "2026/10/24")
+    const yyyymmddMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(.*)$/);
+    if (yyyymmddMatch) {
+      const year = parseInt(yyyymmddMatch[1], 10);
+      const month = parseInt(yyyymmddMatch[2], 10) - 1;
+      const day = parseInt(yyyymmddMatch[3], 10);
+      const timePart = yyyymmddMatch[4]?.trim();
+      const d = new Date(year, month, day);
+
+      if (timePart) {
+        const cleanTime = timePart.replace(/^[T,\s]+/, '');
+        const timeParsed = new Date(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${cleanTime}`);
+        if (!isNaN(timeParsed.getTime())) return timeParsed;
+      }
+
+      if (!isNaN(d.getTime())) return d;
+    }
+
+    // 3. Try standard Date parsing (e.g. ISO strings "2026-10-24T12:00:00Z", "24 Oct 2026", "October 24, 2026")
+    const standardDate = new Date(trimmed);
+    if (!isNaN(standardDate.getTime())) return standardDate;
+  }
+  return null;
+};
+
+export const formatSafeDate = (
+  input: any,
+  options: Intl.DateTimeFormatOptions = { day: "numeric", month: "long", year: "numeric" },
+  fallback = new Date()
+): string => {
+  const d = parseSafeDate(input) || parseSafeDate(fallback) || new Date();
+  return d.toLocaleDateString("en-GB", options);
+};
+
+export const formatSafeTime = (
+  input: any,
+  options: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-digit", hour12: true },
+  fallback = new Date()
+): string => {
+  const d = parseSafeDate(input) || parseSafeDate(fallback) || new Date();
+  return d.toLocaleTimeString("en-IN", options);
+};
+
 export const computeAgeFromDob = (dob: any, fallbackAge: any, fallbackUnit: any) => {
   if (dob) {
-    const birthDate = new Date(dob);
-    if (!isNaN(birthDate.getTime())) {
+    const birthDate = parseSafeDate(dob);
+    if (birthDate && !isNaN(birthDate.getTime())) {
       const today = new Date();
       let ageYears = today.getFullYear() - birthDate.getFullYear();
       let ageMonths = today.getMonth() - birthDate.getMonth();
@@ -788,9 +876,10 @@ export const generateLabReceiptHtml = (data: any) => {
   const patMRN = patient.mrn || patient.medicalRecordNumber || patient.uhid || appointment.patientDetails?.mrn || data.mrn || "N/A";
   const docName = formatDoctorName(appointment.doctorName || appointment.primaryDoctor || appointment.doctor?.name || appointment.refDoctor || data.refDoctor || data.doctorName || "-");
 
-  const visitDateRaw = appointment.date || appointment.appointmentDate || payment.date || data.billDate || data.createdAt || new Date();
-  const currentDate = new Date(visitDateRaw).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-  const currentTime = appointment.time || appointment.appointmentTime || new Date(visitDateRaw).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+  const visitDateRaw = appointment.date || appointment.appointmentDate || payment.date || data.billDate || data.createdAt || data.date || (appointment as any).bookedAt || new Date();
+  const safeVisitDate = parseSafeDate(visitDateRaw) || parseSafeDate(payment.date) || parseSafeDate((appointment as any).bookedAt) || parseSafeDate(data.createdAt) || new Date();
+  const currentDate = safeVisitDate.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  const currentTime = appointment.time || appointment.appointmentTime || safeVisitDate.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
 
   // Tests list
   let testItems: any[] = [];
@@ -1145,21 +1234,7 @@ export const generateOPDRegistrationSlipHtml = (data: any) => {
     return `${day}-${month}-${year}`;
   };
 
-  let baseVisitDate = new Date();
-  if (appointment.date) {
-    if (typeof appointment.date === 'string' && appointment.date.includes('/')) {
-      const parts = appointment.date.split('/');
-      if (parts.length === 3) {
-        baseVisitDate = new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
-      } else {
-        baseVisitDate = new Date(appointment.date);
-      }
-    } else {
-      baseVisitDate = new Date(appointment.date);
-    }
-  } else if (appointment.appointmentDate) {
-    baseVisitDate = new Date(appointment.appointmentDate);
-  }
+  let baseVisitDate = parseSafeDate(appointment.date) || parseSafeDate(appointment.appointmentDate) || parseSafeDate(payment.date) || new Date();
 
   // Always use the live hospital admin's currently configured values!
   // Do not use the stored snapshot because admin might have updated the window duration.
@@ -1750,8 +1825,8 @@ export const generateClinicalReceiptHtml = (data: any) => {
     return `${day}-${month}-${year}`;
   };
 
-  const visitDateRaw = appointment.date || appointment.appointmentDate || new Date();
-  const baseVisitDate = new Date(visitDateRaw);
+  const visitDateRaw = appointment.date || appointment.appointmentDate || payment.date || (appointment as any).createdAt || (payment as any).createdAt || new Date();
+  const baseVisitDate = parseSafeDate(visitDateRaw) || new Date();
 
   let followUpExpiryMsg = "";
   const liveEnableExpiry = hospital.enableFollowUpExpiry ?? true;
@@ -2215,7 +2290,7 @@ export const generateClinicalReceiptHtml = (data: any) => {
                     </div>
                   </div>
                   <div class="bill-meta">
-                    <div><strong>Date:</strong> ${payment.date ? new Date(payment.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : appointment.date}</div>
+                    <div><strong>Date:</strong> ${payment.date ? formatSafeDate(payment.date, { day: "2-digit", month: "short", year: "numeric" }) : (appointment.date ? formatSafeDate(appointment.date, { day: "2-digit", month: "short", year: "numeric" }) : formatSafeDate(new Date(), { day: "2-digit", month: "short", year: "numeric" }))}</div>
                     <div><strong>Booking Time:</strong> ${appointment.bookedAt ? formatTime12Hr(appointment.bookedAt) : new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}</div>
                     <div><strong>Receipt No:</strong> ${payment.receiptNumber || payment.receiptNo || appointment.appointmentId}</div>
                   </div>
@@ -2679,7 +2754,7 @@ export const generateClinicalReceiptHtml = (data: any) => {
                               </thead>
                               <tbody>
                                 ${receiptList.map((r: any, idx: number) => {
-          const rDate = r.date ? (typeof r.date === 'string' && r.date.includes('/') ? r.date : new Date(r.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })) : (appointment.date || '-');
+          const rDate = r.date ? formatSafeDate(r.date, { day: '2-digit', month: 'short', year: 'numeric' }) : (appointment.date ? formatSafeDate(appointment.date, { day: '2-digit', month: 'short', year: 'numeric' }) : '-');
           const rNo = r.receiptNo || r.receiptNumber || r.transactionId || `REC-0${idx + 1}`;
           const rAmt = Math.round(Number(r.amount || 0)).toLocaleString('en-IN');
           const rType = r.type || r.mode || r.paymentMode || (idx === 0 && advancePaid > 0 ? 'Advance' : 'Settlement');
@@ -2808,14 +2883,12 @@ export const generatePrescriptionHtml = (data: any) => {
     data.mrn ||
     "-";
 
-  const displayDate = new Date(
-    prescription.prescriptionDate || prescription.createdAt || new Date()
-  ).toLocaleDateString("en-GB");
+  const displayDate = formatSafeDate(prescription.prescriptionDate || prescription.createdAt || new Date(), { day: "numeric", month: "long", year: "numeric" });
 
   let followUpFormatted = "";
   if (prescription.followUpDate) {
     try {
-      followUpFormatted = new Date(prescription.followUpDate).toLocaleDateString("en-US", {
+      followUpFormatted = formatSafeDate(prescription.followUpDate, {
         month: "short",
         day: "numeric",
         year: "numeric",
@@ -4310,13 +4383,9 @@ export const generateAddBillsReceiptHtml = (data: any) => {
     ageDisplay = computeAgeFromDob(patient.dob, patient.age, patient.ageUnit);
   }
 
-  const billDateObj = payment?.date ? new Date(payment.date) : new Date();
-  const billDateFormatted = !isNaN(billDateObj.getTime())
-    ? billDateObj.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
-    : new Date().toLocaleDateString("en-GB");
-  const billTimeFormatted = !isNaN(billDateObj.getTime())
-    ? billDateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
-    : new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  const billDateObj = parseSafeDate(payment?.date || (payment as any)?.createdAt) || new Date();
+  const billDateFormatted = billDateObj.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const billTimeFormatted = billDateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
 
   const doctorDisplay = patient?.refDoctor || (appointment?.doctorName ? `Dr. ${appointment.doctorName.replace(/^Dr\.?\s*/i, '')}` : "Self / Walk-in");
   const receiptNumber = payment?.receiptNo || payment?.receiptNumber || "N/A";

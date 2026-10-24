@@ -3,6 +3,7 @@ import { BillPayload } from '@/lib/integrations/types/labBilling';
 import Image from 'next/image';
 import { LabSettingsService, LabSettings } from '@/lib/integrations/services/labSettings.service';
 import { formatPatientNameWithPrefix } from '@/lib/utils/name-utils';
+import { parseSafeDate } from '@/lib/print-utils';
 import { usePrintStore } from '@/stores/printStore';
 
 import HeaderPrint from './HeaderPrint';
@@ -21,7 +22,8 @@ interface BillPrintViewProps {
 
 const BillPrintView: React.FC<BillPrintViewProps> = ({ billData, invoiceId, date, patientType }) => {
     const { showHonorificInReceipts } = usePrintStore();
-    const currentDate = date || new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    const safeDate = parseSafeDate(date || (billData as any)?.createdAt || (billData as any)?.billDate) || new Date();
+    const currentDate = safeDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
     const effectiveType = patientType || billData.patientType || 'opd';
 
     const invoiceLabel = effectiveType === 'ipd'

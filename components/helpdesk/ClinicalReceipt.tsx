@@ -92,6 +92,9 @@ interface ReceiptProps {
     chiefComplaint?: string;
     tests?: any[];
     testName?: string;
+    appointmentDate?: string;
+    bookedAt?: string;
+    createdAt?: string;
   };
   payment: {
     amount: number;
@@ -120,6 +123,7 @@ interface ReceiptProps {
     receiptNumber?: string;
     receiptNo?: string;
     date?: string;
+    createdAt?: string;
     paymentDetails?: any;
   };
   isLab?: boolean;
@@ -288,8 +292,11 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
         const totalPaidCalc = Number(payment.totalPaidAmount || (advanceAmountCalc + settlementPaidCalc));
         const newBalanceCalc = Math.max(0, afterDiscountCalc - totalPaidCalc);
 
+        const resolvedDate = payment.date || appointment.date || (appointment as any).bookedAt || (payment as any).createdAt || (appointment as any).createdAt || new Date();
+
         const mappedPayment = {
           ...payment,
+          date: resolvedDate,
           discount: effectiveDiscount,
           balance: newBalanceCalc,
           dueAmount: newBalanceCalc,
@@ -297,6 +304,7 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
 
         const mappedAppointment = {
           ...appointment,
+          date: resolvedDate,
           discount: effectiveDiscount,
           notes: patient.symptoms || appointment.notes,
         };

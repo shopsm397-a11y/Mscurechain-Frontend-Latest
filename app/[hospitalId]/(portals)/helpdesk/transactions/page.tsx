@@ -1704,6 +1704,27 @@ export default function TransactionsPage() {
 
                 // Collect all matching payment transactions for this patient / admission to guarantee accurate receipts
                 const matchingTxList = transactions.filter((t: any) => {
+                    const targetAdmissionId = apptData.admissionId || previewTx.referenceId?.admissionId || previewTx.admissionId;
+                    const targetApptId = apptData._id || previewTx.referenceId?._id || (typeof previewTx.referenceId === 'string' ? previewTx.referenceId : null);
+
+                    if (isDischargeTx) {
+                        // For an IPD discharge bill, strictly match transactions tied to this specific admission
+                        const sameAdmission = Boolean(
+                            (targetAdmissionId && (t.referenceId?.admissionId === targetAdmissionId || t.admissionId === targetAdmissionId || t.referenceId === targetAdmissionId)) ||
+                            (targetApptId && (t.referenceId?._id === targetApptId || t.referenceId === targetApptId || t.referenceId?.appointmentId === targetApptId))
+                        );
+                        if (sameAdmission) return true;
+
+                        // Fallback matching for same patient: MUST be an IPD admission/advance/discharge transaction, NOT OPD/Lab/Consultation
+                        const sameMrn = Boolean(resolvedMrn && resolvedMrn !== 'N/A' && (t.patientMRN === resolvedMrn || t.referenceId?.mrn === resolvedMrn));
+                        const sameName = cleanPatientName(t.patientName || '').toUpperCase() === cleanPatientName(previewTx.patientName || '').toUpperCase();
+                        const tType = (t.type || t.serviceType || '').toLowerCase();
+                        const isIpdSpecific = tType.includes('ipd') || tType.includes('admission') || tType.includes('discharge') || tType.includes('settlement');
+                        const isNonIpd = tType.includes('lab') || tType.includes('opd') || tType.includes('consultation') || tType.includes('pharmacy');
+
+                        return (sameMrn || sameName) && isIpdSpecific && !isNonIpd;
+                    }
+
                     const sameAdmission = (apptData._id && (t.referenceId?._id === apptData._id || t.referenceId === apptData._id)) ||
                                          (apptData.admissionId && (t.referenceId?.admissionId === apptData.admissionId || t.admissionId === apptData.admissionId));
                     const sameMrn = (resolvedMrn && resolvedMrn !== 'N/A' && (t.patientMRN === resolvedMrn || t.referenceId?.mrn === resolvedMrn));
@@ -1713,13 +1734,22 @@ export default function TransactionsPage() {
 
                 const collectedReceipts = matchingTxList
                     .filter((t: any) => Number(t.amount || t.payment?.amount || 0) > 0)
-                    .map((t: any) => ({
-                        date: t.date || t.createdAt,
-                        receiptNo: t.receiptNumber || t.transactionId || t.invoiceNumber || '-',
-                        amount: Number(t.amount || t.payment?.amount || 0),
-                        mode: t.paymentMethod || t.paymentMode || 'Cash',
-                        type: (t.type || '').toLowerCase().includes('advance') ? 'Advance' : 'Settlement',
-                    }))
+                    .map((t: any) => {
+                        const rawT = (t.type || t.serviceType || '').toLowerCase();
+                        let txType: 'Advance' | 'Settlement' = 'Settlement';
+                        if (rawT.includes('advance')) {
+                            txType = 'Advance';
+                        } else if (rawT.includes('settlement') || rawT.includes('discharge') || rawT.includes('final')) {
+                            txType = 'Settlement';
+                        }
+                        return {
+                            date: t.date || t.createdAt,
+                            receiptNo: t.receiptNumber || t.transactionId || t.invoiceNumber || '-',
+                            amount: Number(t.amount || t.payment?.amount || 0),
+                            mode: t.paymentMethod || t.paymentMode || 'Cash',
+                            type: txType,
+                        };
+                    })
                     .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
                 const collectedAdvance = collectedReceipts
@@ -1737,7 +1767,7 @@ export default function TransactionsPage() {
                     previewTx.totalBillAmount ||
                     previewTx.grandTotal ||
                     (collectedAdvance + collectedSettlement) ||
-                    106088
+                    0
                 );
 
                 const advanceAmount = collectedAdvance > 0 
@@ -1749,8 +1779,15 @@ export default function TransactionsPage() {
                     ? collectedSettlement
                     : Number(previewTx.amount || previewTx.payment?.amount || apptData.settlementAmount || apptData.remainingPaid || 0);
 
-                if (isDischargeTx && settlementPaid === 0 && grandTotal > advanceAmount) {
-                    settlementPaid = Math.max(0, grandTotal - discount - advanceAmount);
+                if (isDischargeTx) {
+                    const expectedRemaining = Math.max(0, grandTotal - discount - advanceAmount);
+                    if (previewTx.amount && Math.abs(Number(previewTx.amount) - expectedRemaining) < 1) {
+                        settlementPaid = Number(previewTx.amount);
+                    } else if (settlementPaid === 0 || Math.abs(settlementPaid - expectedRemaining) > 0.01) {
+                        if (expectedRemaining > 0) {
+                            settlementPaid = expectedRemaining;
+                        }
+                    }
                 }
 
                 const totalPaid = Number(apptData.totalPaidAmount || (advanceAmount + settlementPaid));
@@ -1787,8 +1824,8 @@ export default function TransactionsPage() {
                         appointment={{
                             appointmentId: previewTx.referenceId?.appointmentId || previewTx.referenceId?.admissionId || previewTx.referenceId?.sampleId || previewTx.transactionId || previewTx.receiptNumber || 'N/A',
                             type: isDischargeTx ? 'IPD_FINAL_SETTLEMENT' : (previewTx.type || 'consultation'),
-                            date: previewTx.createdAt ? new Date(previewTx.createdAt).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'),
-                            time: previewTx.appointmentTime || previewTx.time || '10:00 AM',
+                            date: previewTx.createdAt || new Date().toISOString(),
+                                                        time: previewTx.appointmentTime || previewTx.time || '10:00 AM',
                             doctorName: previewTx.referenceId?.primaryDoctor || previewTx.referenceId?.suggestedDoctorName || previewTx.referenceId?.doctorName || 'Doctor',
                             specialization: isDischargeTx ? 'IPD DISCHARGE' : (previewTx.type || 'Consultation'),
                             symptoms: previewTx.symptoms || apptData.symptoms || previewTx.reason || apptData.reason,
@@ -1798,7 +1835,8 @@ export default function TransactionsPage() {
                         payment={{
                             amount: isDischargeTx ? settlementPaid : Number(previewTx.amount || previewTx.payment?.amount || 0),
                             fee: grandTotal,
-                            totalBillAmount: isDischargeTx ? grandTotal : Number(previewTx.amount || 0),
+                            date: previewTx.createdAt || new Date().toISOString(),
+                                                        totalBillAmount: isDischargeTx ? grandTotal : Number(previewTx.amount || 0),
                             grandTotal: grandTotal,
                             advanceAmount: advanceAmount,
                             remainingPaid: settlementPaid,
