@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Trash2, FileText, Stethoscope, Bed, Pill, Wrench, FlaskConical, CreditCard, Printer, Calendar, Search, Activity, RefreshCw, UserCheck, Save } from 'lucide-react';
+import { Plus, Trash2, FileText, Stethoscope, Bed, Pill, Wrench, FlaskConical, CreditCard, Printer, Calendar, Search, Activity, RefreshCw, UserCheck, Save, UserCog } from 'lucide-react';
 import { hospitalAdminService } from '@/lib/integrations/services/hospitalAdmin.service';
 import { helpdeskService } from '@/lib/integrations/services/helpdesk.service';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -171,9 +171,9 @@ export default function TransactionReportsPage() {
     const router = useRouter();
     const params = useParams() as any;
     const searchParams = useSearchParams() as any;
-    const patientId = ((searchParams?.get('patientId') ?? null) ?? null);
-    const loadReportId = ((searchParams?.get('loadReport') ?? null) ?? null);
-    const formatParam = ((searchParams?.get('format') ?? null) as ReportTemplateFormat | null);
+    const patientId = searchParams?.get('patientId') || null;
+    const loadReportId = searchParams?.get('loadReport') || null;
+    const formatParam = (searchParams?.get('format') as ReportTemplateFormat) || null;
 
     const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
     const [printConfig, setPrintConfig] = useState({
@@ -267,68 +267,349 @@ export default function TransactionReportsPage() {
         } catch (e) {}
     }, [patientId, dischargeData]);
 
-    // Edit Doctor State
-    const [showDoctorModal, setShowDoctorModal] = useState(false);
-    const [availableDoctors, setAvailableDoctors] = useState<any[]>([]);
-    const [isUpdatingDoctor, setIsUpdatingDoctor] = useState(false);
+    // Pre-fetch available doctors for instant modal display
+    useEffect(() => {
+        hospitalAdminService.getDoctors()
+            .then((res: any) => {
+                const docs = res.doctors || res.data || res || [];
+                setAvailableDoctors(docs);
+            })
+            .catch(() => {});
+    }, []);
 
-    const openDoctorModal = async () => {
-        if (!admission || !admission._id) {
-            toast.error("No active appointment/admission to update.");
+    // Edit Encounter & Patient Details Modal State
+    const [showEditDetailsModal, setShowEditDetailsModal] = useState(false);
+    const [availableDoctors, setAvailableDoctors] = useState<any[]>([]);
+    const [editDoctorId, setEditDoctorId] = useState('');
+    const [editGuardianName, setEditGuardianName] = useState('');
+    const [editGuardianMobile, setEditGuardianMobile] = useState('');
+    const [editDoctorReference, setEditDoctorReference] = useState('');
+    const [isSavingDetails, setIsSavingDetails] = useState(false);
+
+    const openEditDetailsModal = async () => {
+        if (!patientId) {
+            toast.error("Please select a patient first.");
             return;
         }
-        try {
-            const res = await hospitalAdminService.getDoctors() as any;
-            setAvailableDoctors(res.doctors || res.data || res || []);
-            setShowDoctorModal(true);
-        } catch (error) {
-            toast.error("Failed to fetch doctors");
+
+        const currentAdm = activeEncounterType === 'IPD' ? (admission || availableEncounters.ipd || {}) : (admission || {});
+
+        const cleanField = (val: any): string => {
+            if (!val) return '';
+            const str = String(val).trim();
+            if (['na', 'n/a', 'null', 'undefined', 'none', '-', '--', 'not available'].includes(str.toLowerCase())) {
+                return '';
+            }
+            return str;
+        };
+
+        const cleanMobile = (val: any): string => {
+            const str = cleanField(val);
+            if (!str) return '';
+            const digits = str.replace(/\D/g, '');
+            if (digits.length < 5) return '';
+            return str;
+        };
+
+        // 1. Resolve Guardian Name
+        const rawGName =
+            patient?.guardianName ||
+            patient?.GuardianName ||
+            patient?.profile?.GuardianName ||
+            patient?.profile?.guardianName ||
+            patient?.user?.guardianName ||
+            patient?.user?.GuardianName ||
+            patient?.patientDetails?.guardianName ||
+            currentAdm?.guardianName ||
+            '';
+        setEditGuardianName(cleanField(rawGName));
+
+        // 2. Resolve Guardian Mobile
+        const rawGMob =
+            patient?.guardianMobile ||
+            patient?.GuardianMobile ||
+            patient?.profile?.GuardianMobile ||
+            patient?.profile?.guardianMobile ||
+            patient?.user?.guardianMobile ||
+            currentAdm?.guardianMobile ||
+            '';
+        setEditGuardianMobile(cleanMobile(rawGMob));
+
+        // 3. Resolve Doctor Reference / Referred By
+        const rawDocRef =
+            patient?.doctorReference ||
+            patient?.referredBy ||
+            patient?.profile?.doctorReference ||
+            patient?.profile?.referredBy ||
+            currentAdm?.doctorReference ||
+            currentAdm?.referredBy ||
+            '';
+        setEditDoctorReference(cleanField(rawDocRef));
+
+        // 4. Ensure Doctors List is Loaded
+        let docs = availableDoctors;
+        if (!docs || docs.length === 0) {
+            try {
+                const res = await hospitalAdminService.getDoctors() as any;
+                docs = res.doctors || res.data || res || [];
+                setAvailableDoctors(docs);
+            } catch (error) {
+                console.error("Failed to fetch doctors:", error);
+                docs = [];
+            }
         }
+
+        // 5. Multi-Source Auto-Selection of Previous Doctor
+        const candidateDoctorIds = new Set<string>();
+        const addCandidateId = (val: any) => {
+            if (!val) return;
+            if (typeof val === 'string' && val.length > 5) candidateDoctorIds.add(val.trim());
+            if (typeof val === 'object') {
+                if (val._id) candidateDoctorIds.add(String(val._id));
+                if (val.id) candidateDoctorIds.add(String(val.id));
+                if (val.user?._id) candidateDoctorIds.add(String(val.user._id));
+                if (typeof val.user === 'string' && val.user.length > 5) candidateDoctorIds.add(val.user);
+            }
+        };
+
+        addCandidateId(currentAdm?.primaryDoctor);
+        addCandidateId(currentAdm?.doctor);
+        addCandidateId(availableEncounters.ipd?.primaryDoctor);
+        addCandidateId(availableEncounters.ipd?.doctor);
+        addCandidateId(availableEncounters.opd?.doctor);
+        addCandidateId(patient?.assignedDoctor);
+        addCandidateId(patient?.doctor);
+        addCandidateId(patient?.primaryDoctor);
+
+        const candidateDoctorNames: string[] = [];
+        const addCandidateName = (val: any) => {
+            if (!val) return;
+            if (typeof val === 'string') {
+                const trimmed = val.trim();
+                if (trimmed && !['doctor consultation', 'consultant', 'n/a', 'na', 'null', 'undefined', 'general'].includes(trimmed.toLowerCase())) {
+                    candidateDoctorNames.push(trimmed);
+                }
+            } else if (typeof val === 'object') {
+                if (val.doctorName) addCandidateName(val.doctorName);
+                if (val.name) addCandidateName(val.name);
+                if (val.user?.name) addCandidateName(val.user.name);
+            }
+        };
+
+        // Highest priority: doctors listed in consultation charges table
+        doctors.forEach(d => addCandidateName(d.doctorName));
+        addCandidateName(currentAdm?.primaryDoctor);
+        addCandidateName(currentAdm?.doctor);
+        addCandidateName(currentAdm?.doctorName);
+        addCandidateName(availableEncounters.ipd?.primaryDoctor);
+        addCandidateName(availableEncounters.ipd?.doctor);
+        addCandidateName(availableEncounters.ipd?.doctorName);
+        addCandidateName(availableEncounters.opd?.doctor);
+        addCandidateName(availableEncounters.opd?.doctorName);
+        addCandidateName(patient?.assignedDoctor);
+        addCandidateName(patient?.doctor);
+        addCandidateName(patient?.primaryDoctor);
+
+        if (loadReportId) {
+            const loaded = savedReports.find((x: any) => x._id === loadReportId);
+            if (loaded) {
+                if (Array.isArray(loaded.reportData?.doctors)) {
+                    loaded.reportData.doctors.forEach((d: any) => addCandidateName(d.doctorName || d.name));
+                }
+                addCandidateName(loaded.reportData?.admission?.primaryDoctor);
+                addCandidateName(loaded.reportData?.admission?.doctor);
+                addCandidateName(loaded.reportData?.admission?.doctorName);
+            }
+        }
+
+        let selectedId = '';
+
+        // Match Strategy A: ID Match
+        if (candidateDoctorIds.size > 0 && docs.length > 0) {
+            const idMatched = docs.find((d: any) => {
+                const dId = String(d._id || d.id || '');
+                const uId = String(d.user?._id || (typeof d.user === 'string' ? d.user : '') || '');
+                const customId = String(d.doctorId || '');
+                return (
+                    (dId && candidateDoctorIds.has(dId)) ||
+                    (uId && candidateDoctorIds.has(uId)) ||
+                    (customId && candidateDoctorIds.has(customId))
+                );
+            });
+            if (idMatched) selectedId = idMatched._id || idMatched.id;
+        }
+
+        // Match Strategy B: Normalized Bidirectional Name Match
+        if (!selectedId && candidateDoctorNames.length > 0 && docs.length > 0) {
+            const cleanNameForCompare = (s: string) =>
+                String(s || '')
+                    .toLowerCase()
+                    .replace(/^(dr\.?|doctor)\s+/i, '')
+                    .replace(/[-–—/\\,()]/g, ' ')
+                    .replace(/[^a-z0-9\s]/g, '')
+                    .trim();
+
+            for (const candidate of candidateDoctorNames) {
+                const targetClean = cleanNameForCompare(candidate);
+                if (!targetClean || targetClean.length < 2) continue;
+
+                const targetTokens = targetClean.split(/\s+/).filter(w => w.length >= 3 && !['surgeon', 'physician', 'consultant', 'doctor'].includes(w));
+
+                const nameMatched = docs.find((d: any) => {
+                    const docNameClean = cleanNameForCompare(d.user?.name || d.name || '');
+                    if (!docNameClean) return false;
+
+                    // Direct equal or substring in either direction
+                    if (targetClean === docNameClean) return true;
+                    if (targetClean.includes(docNameClean) || docNameClean.includes(targetClean)) return true;
+
+                    // Meaningful word match (e.g. "sukumar")
+                    const docTokens = docNameClean.split(/\s+/).filter(w => w.length >= 3);
+                    if (targetTokens.some(tok => docTokens.includes(tok) || docNameClean.includes(tok))) return true;
+
+                    return false;
+                });
+
+                if (nameMatched) {
+                    selectedId = nameMatched._id || nameMatched.id;
+                    break;
+                }
+            }
+        }
+
+        // Strategy C: If only 1 doctor in hospital, auto-select
+        if (!selectedId && docs.length === 1) {
+            selectedId = docs[0]._id || docs[0].id;
+        }
+
+        setEditDoctorId(selectedId || '');
+        setShowEditDetailsModal(true);
     };
 
-    const handleDoctorUpdate = async (doctorId: string) => {
-        if (!doctorId) return;
-        setIsUpdatingDoctor(true);
+    const handleSaveDetails = async (e?: React.FormEvent) => {
+        if (e) e.preventDefault();
+        if (!patientId) return;
+
+        setIsSavingDetails(true);
         try {
-            if (patientType === 'IPD' && admission?._id) {
-                await apiClient(`/ipd/admissions/${admission._id}`, { method: 'PATCH', body: JSON.stringify({ primaryDoctor: doctorId }) });
-            } else if (patientType === 'OPD' && admission?._id) {
-                await apiClient(`/appointments/${admission._id}/doctor`, { method: 'PATCH', body: JSON.stringify({ doctorId }) });
-            } else {
-                toast.error("Cannot determine appointment type.");
-                return;
-            }
-            toast.success("Attending doctor updated successfully!");
-            setShowDoctorModal(false);
-            
-            // Update local state so UI reflects it immediately
-            const selectedDoc = availableDoctors.find(d => (d._id || d.id) === doctorId);
-            if (selectedDoc) {
-                const newDocName = selectedDoc.user?.name || selectedDoc.name;
-                setDoctors(prev => {
-                    const newDocs = [...prev];
-                    if (newDocs.length > 0) {
-                        newDocs[0].doctorName = newDocName;
-                        newDocs[0].specialization = selectedDoc.specialization || newDocs[0].specialization;
-                    }
-                    return newDocs;
-                });
-                if (admission) {
-                    setAdmission({
-                        ...admission,
-                        primaryDoctor: selectedDoc,
-                        doctor: selectedDoc,
-                        doctorReference: newDocName
+            const currentAdm = activeEncounterType === 'IPD' ? (admission || availableEncounters.ipd) : admission;
+            const currentDocObj = currentAdm?.primaryDoctor || currentAdm?.doctor;
+            const currentDocId = typeof currentDocObj === 'object' && currentDocObj !== null ? (currentDocObj._id || currentDocObj.id) : (currentDocObj || '');
+
+            // 1. Update Doctor on Admission/Appointment if changed
+            const selectedDoc = availableDoctors.find((d: any) => (d._id || d.id) === editDoctorId);
+            if (editDoctorId && editDoctorId !== currentDocId && currentAdm?._id) {
+                if (patientType === 'IPD') {
+                    await apiClient(`/ipd/admissions/${currentAdm._id}`, { method: 'PATCH', body: JSON.stringify({ primaryDoctor: editDoctorId }) });
+                } else if (patientType === 'OPD') {
+                    await apiClient(`/appointments/${currentAdm._id}/doctor`, { method: 'PATCH', body: JSON.stringify({ doctorId: editDoctorId }) });
+                }
+
+                if (selectedDoc) {
+                    const newDocName = selectedDoc.user?.name || selectedDoc.name;
+                    setDoctors(prev => {
+                        const newDocs = [...prev];
+                        if (newDocs.length > 0) {
+                            newDocs[0].doctorName = newDocName;
+                            newDocs[0].specialization = selectedDoc.specialization || newDocs[0].specialization;
+                        }
+                        return newDocs;
                     });
                 }
             }
-            
-            fetchHistory(); // Refresh to pull updated history if applicable
+
+            // 2. Update Patient Profile (Guardian & Doctor Reference) in Database
+            const payload = {
+                guardianName: editGuardianName.trim(),
+                GuardianName: editGuardianName.trim(),
+                fatherName: editGuardianName.trim(),
+                guardianMobile: editGuardianMobile.trim(),
+                GuardianMobile: editGuardianMobile.trim(),
+                doctorReference: editDoctorReference.trim(),
+                referredBy: editDoctorReference.trim(),
+            };
+            await helpdeskService.updatePatient(patientId, payload);
+
+            // 3. Update Local Patient State
+            setPatient((prev: any) => ({
+                ...(prev || {}),
+                guardianName: editGuardianName.trim(),
+                GuardianName: editGuardianName.trim(),
+                fatherName: editGuardianName.trim(),
+                guardianMobile: editGuardianMobile.trim(),
+                GuardianMobile: editGuardianMobile.trim(),
+                doctorReference: editDoctorReference.trim(),
+                referredBy: editDoctorReference.trim(),
+                profile: {
+                    ...(prev?.profile || {}),
+                    GuardianName: editGuardianName.trim(),
+                    GuardianMobile: editGuardianMobile.trim(),
+                    doctorReference: editDoctorReference.trim(),
+                    referredBy: editDoctorReference.trim(),
+                },
+                user: {
+                    ...(prev?.user || {}),
+                    guardianName: editGuardianName.trim(),
+                    GuardianName: editGuardianName.trim(),
+                    fatherName: editGuardianName.trim(),
+                    guardianMobile: editGuardianMobile.trim(),
+                    GuardianMobile: editGuardianMobile.trim(),
+                    doctorReference: editDoctorReference.trim(),
+                    referredBy: editDoctorReference.trim(),
+                }
+            }));
+
+            // 4. Update Local Admission State
+            if (currentAdm) {
+                setAdmission((prev: any) => ({
+                    ...(prev || {}),
+                    guardianName: editGuardianName.trim(),
+                    guardianMobile: editGuardianMobile.trim(),
+                    doctorReference: editDoctorReference.trim(),
+                    referredBy: editDoctorReference.trim(),
+                    ...(selectedDoc ? { primaryDoctor: selectedDoc, doctor: selectedDoc } : {})
+                }));
+            }
+
+            // 5. Update Saved Manual Report if Loaded
+            if (loadReportId && !loadReportId.startsWith('AUTO_BILL_')) {
+                try {
+                    const reportData = {
+                        doctors, admissions, meds, services, diags, payments,
+                        isOPD: patientType === 'OPD',
+                        printConfig,
+                        doctorReference: editDoctorReference.trim(),
+                        referredBy: editDoctorReference.trim(),
+                        guardianName: editGuardianName.trim(),
+                        GuardianName: editGuardianName.trim(),
+                        guardianMobile: editGuardianMobile.trim(),
+                        GuardianMobile: editGuardianMobile.trim(),
+                        templateFormat,
+                        dischargeData,
+                        admission: currentAdm,
+                        admissionId: currentAdm?.admissionId || currentAdm?._id || '',
+                    };
+                    const totals = { grandTotal: grand, totalPaid: activeTotPaid, balance: balance, discount: discount };
+                    await helpdeskService.updateTransactionReport(loadReportId, {
+                        reportData,
+                        totals,
+                        admissionId: currentAdm?.admissionId || currentAdm?._id,
+                        admission: currentAdm?._id,
+                        templateFormat,
+                    });
+                } catch (reportErr) {
+                    console.error("Error syncing report data with new details:", reportErr);
+                }
+            }
+
+            toast.success("Details updated successfully in database!");
+            setShowEditDetailsModal(false);
+            fetchHistory();
         } catch (error) {
-            toast.error("Failed to update doctor");
-            console.error(error);
+            console.error("Failed to update details:", error);
+            toast.error("Failed to update details");
         } finally {
-            setIsUpdatingDoctor(false);
+            setIsSavingDetails(false);
         }
     };
     const [patientType, setPatientType] = useState<'IPD' | 'OPD' | null>(null);
@@ -646,6 +927,24 @@ export default function TransactionReportsPage() {
             currentAdm?.referredBy ||
             '';
 
+        const gName =
+            patient?.guardianName ||
+            patient?.GuardianName ||
+            patient?.profile?.GuardianName ||
+            patient?.profile?.guardianName ||
+            patient?.user?.guardianName ||
+            patient?.user?.GuardianName ||
+            currentAdm?.guardianName ||
+            '';
+        const gMob =
+            patient?.guardianMobile ||
+            patient?.GuardianMobile ||
+            patient?.profile?.GuardianMobile ||
+            patient?.profile?.guardianMobile ||
+            patient?.user?.guardianMobile ||
+            currentAdm?.guardianMobile ||
+            '';
+
         const activeDiags = diags.filter(d =>
             d.category === 'radiology' ? printConfig.radiology : printConfig.investigations
         );
@@ -659,6 +958,10 @@ export default function TransactionReportsPage() {
             payments: printConfig.receipts ? payments : [],
             doctorReference: docRef,
             referredBy: docRef,
+            guardianName: gName,
+            GuardianName: gName,
+            guardianMobile: gMob,
+            GuardianMobile: gMob,
             dischargeData,
         };
         const totals = { grandTotal: grand, totalPaid: activeTotPaid, balance: balance, discount: discount };
@@ -699,6 +1002,24 @@ export default function TransactionReportsPage() {
                 admission?.referredBy ||
                 '';
 
+            const gName =
+                patient?.guardianName ||
+                patient?.GuardianName ||
+                patient?.profile?.GuardianName ||
+                patient?.profile?.guardianName ||
+                patient?.user?.guardianName ||
+                patient?.user?.GuardianName ||
+                admission?.guardianName ||
+                '';
+            const gMob =
+                patient?.guardianMobile ||
+                patient?.GuardianMobile ||
+                patient?.profile?.GuardianMobile ||
+                patient?.profile?.guardianMobile ||
+                patient?.user?.guardianMobile ||
+                admission?.guardianMobile ||
+                '';
+
             const currentAdm = admission || availableEncounters.ipd;
             const reportData = {
                 doctors, admissions, meds, services, diags, payments,
@@ -706,6 +1027,10 @@ export default function TransactionReportsPage() {
                 printConfig,
                 doctorReference: docRef,
                 referredBy: docRef,
+                guardianName: gName,
+                GuardianName: gName,
+                guardianMobile: gMob,
+                GuardianMobile: gMob,
                 templateFormat,
                 dischargeData,
                 admission: currentAdm,
@@ -875,11 +1200,12 @@ export default function TransactionReportsPage() {
                         </div>
                         {patientId && (
                             <button
-                                onClick={openDoctorModal}
+                                onClick={openEditDetailsModal}
                                 className="h-7 sm:h-9 px-2 sm:px-3.5 bg-white text-emerald-600 font-bold text-[9px] sm:text-xs rounded-lg sm:rounded-xl border border-emerald-200 hover:bg-emerald-50 transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                                title="Edit Doctor, Guardian Name, Phone & Referred By"
                             >
-                                <Stethoscope className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-                                <span>Change Doctor</span>
+                                <UserCog className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                                <span>Edit Details</span>
                             </button>
                         )}
                         <button
@@ -1327,60 +1653,116 @@ export default function TransactionReportsPage() {
                 )
             )}
             
-            {/* Inline Doctor Change Modal */}
-            {showDoctorModal && (() => {
-                const currentAdm = activeEncounterType === 'IPD' ? (admission || availableEncounters.ipd || {}) : (admission || {});
-                const currentDocObj = currentAdm?.primaryDoctor || currentAdm?.doctor;
-                const currentDoctorId = typeof currentDocObj === 'object' && currentDocObj !== null ? (currentDocObj._id || currentDocObj.id) : currentDocObj;
-                const fallbackDocName = doctors.length > 0 ? doctors[0].doctorName : '';
-                const currentDocNameStr = patient?.doctorReference || patient?.referredBy || currentAdm?.doctorReference || fallbackDocName || '';
-
-                return (
-                    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-                        <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200">
-                            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-                                <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                                    <Stethoscope className="w-4 h-4 text-emerald-600" />
-                                    Change Attending Doctor
-                                </h3>
-                                <button onClick={() => setShowDoctorModal(false)} className="text-slate-400 hover:text-slate-600 font-bold text-lg leading-none">×</button>
-                            </div>
-                            <div className="p-4 space-y-4">
-                                <div className="text-xs text-slate-500 font-medium">
-                                    <p>Select the new doctor to assign to this {patientType} encounter.</p>
-                                    {currentDocNameStr && <p className="mt-1 text-slate-700 font-bold">Currently: <span className="text-indigo-600">{currentDocNameStr}</span></p>}
-                                </div>
-                                <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-                                    {availableDoctors.map((doc: any) => {
-                                        const docId = doc._id || doc.id;
-                                        const docName = doc.user?.name || doc.name;
-                                        const safeDocName = String(docName).trim().toLowerCase();
-                                        const safeCurrentDocName = String(currentDocNameStr).trim().toLowerCase();
-                                        const isCurrent = (currentDoctorId && docId === currentDoctorId) || (safeCurrentDocName && (safeDocName === safeCurrentDocName || safeDocName.includes(safeCurrentDocName) || safeCurrentDocName.includes(safeDocName)));
-                                        return (
-                                            <button
-                                                key={docId}
-                                                onClick={() => handleDoctorUpdate(docId)}
-                                                disabled={isUpdatingDoctor || isCurrent}
-                                                className={`w-full text-left px-3 py-2 rounded-xl border transition-all flex items-center justify-between group disabled:opacity-70 ${isCurrent ? 'bg-emerald-50 border-emerald-500 ring-1 ring-emerald-500' : 'border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/50'}`}
-                                            >
-                                                <div className="flex flex-col">
-                                                    <span className={`text-sm font-bold ${isCurrent ? 'text-emerald-800' : 'text-slate-800 group-hover:text-emerald-700'}`}>{docName}</span>
-                                                    <span className={`text-[10px] font-bold uppercase tracking-widest ${isCurrent ? 'text-emerald-600/70' : 'text-slate-400'}`}>{doc.specialization}</span>
-                                                </div>
-                                                {isCurrent && <span className="text-[9px] font-black uppercase bg-emerald-200/50 text-emerald-800 px-1.5 py-0.5 rounded">Current</span>}
-                                            </button>
-                                        );
-                                    })}
-                                    {availableDoctors.length === 0 && (
-                                        <div className="text-center py-4 text-sm text-slate-400 font-bold">No doctors found.</div>
-                                    )}
-                                </div>
-                            </div>
+            {/* Unified Edit Encounter & Patient Details Modal */}
+            {showEditDetailsModal && (
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                            <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                                <UserCog className="w-4 h-4 text-emerald-600" />
+                                Edit Details
+                            </h3>
+                            <button
+                                onClick={() => setShowEditDetailsModal(false)}
+                                className="text-slate-400 hover:text-slate-600 font-bold text-lg leading-none cursor-pointer"
+                            >
+                                ×
+                            </button>
                         </div>
+                        <form onSubmit={handleSaveDetails} className="p-4 space-y-3.5">
+                            <p className="text-xs text-slate-500 font-medium">
+                                Updates are saved directly to the database and will reflect on all print receipts, bills, and future reports.
+                            </p>
+
+                            <div className="space-y-3">
+                                <div>
+                                    <label className="block text-[10px] sm:text-xs font-black text-slate-600 uppercase tracking-wider mb-1">
+                                        Attending Doctor
+                                    </label>
+                                    <select
+                                        value={editDoctorId}
+                                        onChange={(e) => setEditDoctorId(e.target.value)}
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all cursor-pointer"
+                                    >
+                                        <option value="">-- Select Doctor --</option>
+                                        {availableDoctors.map((doc: any) => {
+                                            const docId = doc._id || doc.id;
+                                            const docName = doc.user?.name || doc.name;
+                                            const spec = doc.specialization ? ` (${doc.specialization})` : '';
+                                            return (
+                                                <option key={docId} value={docId}>
+                                                    {docName}{spec}
+                                                </option>
+                                            );
+                                        })}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-[10px] sm:text-xs font-black text-slate-600 uppercase tracking-wider mb-1">
+                                        Guardian / Father Name (S/W/D)
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={editGuardianName}
+                                        onChange={(e) => setEditGuardianName(e.target.value)}
+                                        placeholder="e.g. C.SIVAJI"
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-[10px] sm:text-xs font-black text-slate-600 uppercase tracking-wider mb-1">
+                                        Guardian Phone Number
+                                    </label>
+                                    <input
+                                        type="tel"
+                                        value={editGuardianMobile}
+                                        onChange={(e) => setEditGuardianMobile(e.target.value)}
+                                        placeholder="e.g. 9876543210"
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-[10px] sm:text-xs font-black text-slate-600 uppercase tracking-wider mb-1">
+                                        Referred By / Doctor Reference
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={editDoctorReference}
+                                        onChange={(e) => setEditDoctorReference(e.target.value)}
+                                        placeholder="e.g. Dr. John Doe / Self"
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowEditDetailsModal(false)}
+                                    className="px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isSavingDetails}
+                                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                >
+                                    {isSavingDetails ? (
+                                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                        <Save className="w-3.5 h-3.5" />
+                                    )}
+                                    <span>{isSavingDetails ? "Saving..." : "Save to Database"}</span>
+                                </button>
+                            </div>
+                        </form>
                     </div>
-                );
-            })()}
+                </div>
+            )}
 
 
         </div>

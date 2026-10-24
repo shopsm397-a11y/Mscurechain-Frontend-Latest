@@ -193,7 +193,15 @@ export const generateTransactionReportHTML = (
                                 : '';
                             return [ageText, genderText].filter(Boolean).join(' / ') || 'N/A';
                         })()}</td></tr>
-                        <tr><td class="info-label">S/W/D</td><td>: ${patient?.profile?.GuardianName || patient?.profile?.guardianName || patient?.GuardianName || patient?.guardianName || patient?.user?.guardianName || patient?.user?.GuardianName || patient?.caregiverName || patient?.patientDetails?.guardianName || patient?.patientDetails?.GuardianName || ''}</td></tr>
+                        <tr><td class="info-label">S/W/D</td><td>: ${(() => {
+                            const gName = reportData?.guardianName || reportData?.GuardianName || patient?.guardianName || patient?.GuardianName || patient?.profile?.GuardianName || patient?.profile?.guardianName || patient?.user?.guardianName || patient?.user?.GuardianName || patient?.caregiverName || patient?.patientDetails?.guardianName || patient?.patientDetails?.GuardianName || admission?.guardianName || '';
+                            const rawMob = reportData?.guardianMobile || reportData?.GuardianMobile || patient?.guardianMobile || patient?.GuardianMobile || patient?.profile?.GuardianMobile || patient?.profile?.guardianMobile || patient?.user?.guardianMobile || admission?.guardianMobile || '';
+                            const cleanMob = String(rawMob || '').trim();
+                            const digits = cleanMob.replace(/\D/g, '');
+                            const isValidMob = cleanMob && !['na', 'n/a', 'null', 'undefined', 'none', '-', '0'].includes(cleanMob.toLowerCase()) && digits.length >= 10;
+                            if (!gName) return '';
+                            return isValidMob ? `${gName} (${cleanMob})` : gName;
+                        })()}</td></tr>
                         <tr><td class="info-label">Doctor</td><td>: ${formatDoctorName(admission?.doctorName || admission?.doctor?.name || fallbackDoctor || '')}</td></tr>
                         ${admission?.admissionDate ? `<tr><td class="info-label">Admission Dt</td><td>: ${formatDate(admission?.admissionDate)}</td></tr>` : ''}
                         <tr><td class="info-label">Organization</td><td>: ${admission?.organization || admission?.sponsorName || ''}</td></tr>
@@ -201,6 +209,8 @@ export const generateTransactionReportHTML = (
                         <tr><td class="info-label">Secondary Dr.</td><td>: ${admission?.secondaryDoctor?.name || admission?.secondaryDoctorName || ''}</td></tr>
                         <tr><td class="info-label">Address</td><td>: ${patient?.address || patient?.patientAddress || patient?.patientDetails?.address || patient?.profile?.address || ''}</td></tr>
                         <tr><td class="info-label">Referal By</td><td>: ${
+                            reportData?.doctorReference ||
+                            reportData?.referredBy ||
                             admission?.doctorReference || 
                             admission?.referredBy || 
                             admission?.admissionInfo?.doctorReference ||
@@ -216,8 +226,6 @@ export const generateTransactionReportHTML = (
                             patient?.user?.doctorReference ||
                             patient?.patientInfo?.doctorReference ||
                             patient?.patientInfo?.referredBy ||
-                            reportData?.doctorReference ||
-                            reportData?.referredBy ||
                             ''
                         }</td></tr>
                     </table>
