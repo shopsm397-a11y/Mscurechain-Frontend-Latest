@@ -245,10 +245,19 @@ export async function POST(req: NextRequest) {
     // ── 2. APPOINTMENT / CONSULTATION RECEIPT (Exact match with helpdesk OLD RECEIPT) ──
     else if (type === "appointment" || type === "consultation") {
       const apptObj = data.appointment || data;
+      const rawAmt = data.amount ?? apptObj.amount ?? apptObj.consultationFee ?? apptObj.fee ?? 0;
+      const cleanAmt = typeof rawAmt === 'number' && !isNaN(rawAmt)
+        ? rawAmt
+        : parseFloat(String(rawAmt).replace(/[^0-9.]/g, '')) || 0;
+
+      const rawMode = data.paymentMethod || apptObj.paymentMethod || "UPI";
+      const cleanMode = /razorpay|online/i.test(rawMode) ? "UPI" : rawMode;
+
       const payment = data.payment || apptObj.payment || {
-        amount: data.amount ?? apptObj.amount ?? apptObj.fee ?? 0,
+        amount: cleanAmt,
         status: data.paymentStatus || apptObj.paymentStatus || "PAID",
-        mode: data.paymentMethod || apptObj.paymentMethod || "UPI",
+        mode: cleanMode,
+        method: cleanMode,
       };
 
       const tokenNo =
