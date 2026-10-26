@@ -554,9 +554,10 @@ export const ipdService = {
       body: JSON.stringify(data),
     }),
 
-  lockBill: (admissionId: string) =>
+  lockBill: (admissionId: string, options?: { preserveOriginalCutoff?: boolean }) =>
     apiClient<any>(IPD_ENDPOINTS.BILLING.LOCK(admissionId), {
       method: "PATCH",
+      body: options ? JSON.stringify(options) : undefined,
     }),
 
   unlockBill: (admissionId: string) =>
