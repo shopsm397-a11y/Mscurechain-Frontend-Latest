@@ -3,6 +3,7 @@ import { LabSample } from '@/lib/integrations/types/labSample';
 import HeaderPrint from './HeaderPrint';
 import FooterPrint from './FooterPrint';
 import { formatPatientNameWithPrefix } from '@/lib/utils/name-utils';
+import { computeAgeFromDob } from '@/lib/print-utils';
 
 
 interface LabReportTemplateProps {
@@ -337,8 +338,11 @@ const LabReportTemplate = forwardRef<HTMLDivElement, LabReportTemplateProps>(
                                     <div className="info-row"><span className="info-label">Reg No</span><span>:</span><span>{sample.sampleId}</span></div>
                                     <div className="info-row"><span className="info-label">Patient Name</span><span>:</span><span>{formatPatientNameWithPrefix(sample.patientDetails.originalPatientName || sample.patientDetails.name, (sample.patientDetails as any).honorific, true)}</span></div>
                                     <div className="info-row"><span className="info-label">Age</span><span>:</span><span>{(() => {
-                                        const rawAge: any = sample.patientDetails.age;
-                                        const unit = (sample.patientDetails as any).ageUnit || '';
+                                        const dob = (sample.patientDetails as any)?.dob || (sample.patientDetails as any)?.dateOfBirth || (sample as any)?.patient?.dob || (sample as any)?.patientProfile?.dob;
+                                        const rawAge: any = sample.patientDetails.age ?? (sample as any)?.patient?.age;
+                                        const unit = (sample.patientDetails as any).ageUnit || (sample as any)?.patient?.ageUnit || '';
+                                        const computed = computeAgeFromDob(dob, rawAge, unit);
+                                        if (computed && computed !== 'N/A') return computed;
                                         if (rawAge === undefined || rawAge === null || rawAge === '' || rawAge === '-' || rawAge === 'N/A') return '-';
                                         if (/[a-zA-Z]/.test(String(rawAge))) return String(rawAge);
                                         return unit ? `${rawAge} ${unit}` : `${rawAge} Y`;

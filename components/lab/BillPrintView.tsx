@@ -3,7 +3,7 @@ import { BillPayload } from '@/lib/integrations/types/labBilling';
 import Image from 'next/image';
 import { LabSettingsService, LabSettings } from '@/lib/integrations/services/labSettings.service';
 import { formatPatientNameWithPrefix } from '@/lib/utils/name-utils';
-import { parseSafeDate } from '@/lib/print-utils';
+import { parseSafeDate, computeAgeFromDob } from '@/lib/print-utils';
 import { usePrintStore } from '@/stores/printStore';
 
 import HeaderPrint from './HeaderPrint';
@@ -147,14 +147,17 @@ const BillPrintView: React.FC<BillPrintViewProps> = ({ billData, invoiceId, date
                             <span className="font-semibold text-black">Age / Gender:</span>
                             <span>
                                 {(() => {
-                                    const age = billData.patientDetails?.age;
+                                    const dob = (billData.patientDetails as any)?.dob || (billData.patientDetails as any)?.dateOfBirth || (billData as any)?.patient?.dob;
+                                    const rawAge = billData.patientDetails?.age;
                                     const gender = billData.patientDetails?.gender;
                                     const ageUnit = billData.patientDetails?.ageUnit || 'Years';
+                                    const computed = computeAgeFromDob(dob, rawAge, ageUnit);
 
-                                    const ageDisplay =
-                                        age === undefined || age === null || String(age) === 'N/A' || String(age) === ''
+                                    const ageDisplay = (computed && computed !== 'N/A')
+                                        ? computed
+                                        : (rawAge === undefined || rawAge === null || String(rawAge) === 'N/A' || String(rawAge) === ''
                                             ? '-'
-                                            : `${age} ${ageUnit}`;
+                                            : (/[a-zA-Z]/.test(String(rawAge)) ? String(rawAge) : `${rawAge} ${ageUnit}`));
 
                                     const genderDisplay = !gender ? '-' : gender;
 
