@@ -569,7 +569,7 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
                                 <th style="width: 25%;">Record Date</th>
                                 <th style="width: 27%;">Receipt No</th>
                                 <th class="right" style="width: 25%;">Amount Paid</th>
-                                <th style="width: 15%;">Type</th>
+                                <th style="width: 15%;">Status</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -579,7 +579,7 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
                                     <td>${format(new Date(adv.date), 'dd-MMM-yyyy')}</td>
                                     <td>${adv.reference || 'REC' + Math.floor(Math.random() * 900000 + 100000)}</td>
                                     <td class="right">${Number(adv.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${adv.mode})</td>
-                                    <td>${adv.transactionType}</td>
+                                    <td>${(!adv.transactionType || adv.transactionType.toLowerCase() === 'advance') ? 'Paid' : adv.transactionType}</td>
                                 </tr>
                             `).join('')}
                             <tr class="receipt-total">

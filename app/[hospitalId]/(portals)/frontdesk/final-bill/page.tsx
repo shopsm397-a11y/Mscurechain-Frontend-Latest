@@ -470,7 +470,7 @@ export default function FinalBillPage() {
                             <th style="width: 15%">Record Date</th>
                             <th style="width: 20%">Receipt No</th>
                             <th style="width: 40%">Amount Payment</th>
-                            <th style="width: 20%">Type</th>
+                            <th style="width: 20%">Status</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -482,7 +482,8 @@ export default function FinalBillPage() {
                 const rDate = new Date(r.date || r.createdAt || Date.now()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
                 const rMode = r.paymentMode || r.mode || 'Cash';
                 const receiptNum = r.receiptNumber || r.receiptNo || r.transactionId || '-';
-                const rType = r.type || r.transactionType || 'Advance';
+                const rawType = r.type || r.transactionType || 'Paid';
+                const rType = rawType.toLowerCase() === 'advance' ? 'Paid' : rawType;
                 bodyHtml += `
                     <tr>
                         <td>${rSno++}</td>

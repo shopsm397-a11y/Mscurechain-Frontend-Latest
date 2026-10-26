@@ -403,7 +403,7 @@ export const generateTransactionReportHTML = (
                             <th style="padding: 5px 4px; font-weight: bold; text-align: left;">Record Date</th>
                             <th style="padding: 5px 4px; font-weight: bold; text-align: left;">Receipt No</th>
                             <th style="padding: 5px 4px; font-weight: bold; text-align: right;">Amount Payment</th>
-                            <th style="padding: 5px 4px; font-weight: bold; text-align: left;">Type</th>
+                            <th style="padding: 5px 4px; font-weight: bold; text-align: left;">Status</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -414,7 +414,10 @@ export const generateTransactionReportHTML = (
             if (!p.status || p.status === 'Paid' || p.status === 'Completed') {
                 receiptTotal += Number(p.amount || 0);
                 
-                let modeText = p.mode || p.paymentMode || 'Advance';
+                let modeText = p.mode || p.paymentMode || 'Paid';
+                if (modeText.toLowerCase() === 'advance') {
+                    modeText = 'Paid';
+                }
                 if (modeText.toLowerCase() === 'mixed' && p.paymentDetails) {
                     const details = [];
                     if (p.paymentDetails.cash) details.push(`Cash: ${fmt(p.paymentDetails.cash)}`);
