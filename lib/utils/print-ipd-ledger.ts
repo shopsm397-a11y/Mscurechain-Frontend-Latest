@@ -1,5 +1,6 @@
 import { format } from "date-fns";
 import { formatDoctorName, formatPatientNameWithPrefix } from '@/lib/utils/name-utils';
+import { computeAgeFromDob } from '@/lib/print-utils';
 
 function numberToWords(num: number): string {
     const a = [
@@ -158,11 +159,14 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
     const cinNo = hospitalDetails?.cinNo || "";
     const gstNo = hospitalDetails?.gstNumber || "";
     const ipNo = admissionId;
-    const rawAge = summary?.patientAge ?? summary?.age ?? summary?.patientDetails?.age ?? summary?.patient?.age ?? summary?.patient?.profile?.age ?? (summary?.patient?.dob || summary?.patient?.profile?.dob || summary?.patientDetails?.dob ? Math.floor((Date.now() - new Date(summary?.patient?.dob || summary?.patient?.profile?.dob || summary?.patientDetails?.dob).getTime()) / (1000 * 60 * 60 * 24 * 365.25)) : "") ?? "";
-    const rawAgeUnit = summary?.patientAgeUnit || summary?.ageUnit || summary?.patientDetails?.ageUnit || summary?.patient?.ageUnit || summary?.patient?.profile?.ageUnit || "Y";
+    const patientDob = summary?.dob || summary?.patientDob || summary?.patient?.dob || summary?.patient?.profile?.dob || summary?.patientDetails?.dob || summary?.patientDetails?.dateOfBirth || summary?.patient?.dateOfBirth || summary?.dateOfBirth;
+    const rawAge = summary?.patientAge ?? summary?.age ?? summary?.patientDetails?.age ?? summary?.patient?.age ?? summary?.patient?.profile?.age ?? "";
+    const rawAgeUnit = summary?.patientAgeUnit || summary?.ageUnit || summary?.patientDetails?.ageUnit || summary?.patient?.ageUnit || summary?.patient?.profile?.ageUnit || "Years";
+    const computedAge = computeAgeFromDob(patientDob, rawAge, rawAgeUnit);
+    const formattedAge = (computedAge && computedAge !== "N/A") ? computedAge : (rawAge !== "" ? (/[a-zA-Z]/.test(rawAge.toString()) ? rawAge.toString() : `${rawAge} ${rawAgeUnit}`) : "");
     const rawGender = summary?.patientGender || summary?.gender || summary?.patientDetails?.gender || summary?.patient?.gender || summary?.patient?.profile?.gender || "";
-    const formattedAge = rawAge !== "" ? (/[a-zA-Z]/.test(rawAge.toString()) ? rawAge.toString() : `${rawAge} ${rawAgeUnit}`) : '';
-    const ageSex = [formattedAge, rawGender ? rawGender.charAt(0).toUpperCase() + rawGender.slice(1) : ''].filter(Boolean).join(" / ") || "N/A";
+    const formattedGender = rawGender ? rawGender.charAt(0).toUpperCase() + rawGender.slice(1).toLowerCase() : "";
+    const ageSex = [formattedAge, formattedGender].filter(Boolean).join(" / ") || "N/A";
     const umrNo = summary?.mrn || summary?.patient?.mrn || summary?.patient?.profile?.mrn || "";
     const billNo = summary?.billNumber || "";
     const billDt = format(new Date(), 'dd-MMM-yyyy');

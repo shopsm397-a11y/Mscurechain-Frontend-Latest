@@ -1,5 +1,6 @@
 import { formatPatientNameWithPrefix, formatDoctorName, formatPatientDisplayName } from '@/lib/utils/name-utils';
 import { calculateExactAge } from '@/lib/utils/date-utils';
+import { computeAgeFromDob } from '@/lib/print-utils';
 
 export const numberToWords = (num: number): string => {
     if (num === 0) return "Zero Only";
@@ -183,14 +184,14 @@ export const generateTransactionReportHTML = (
                         <tr><td class="info-label">Patient Name</td><td>: <b>${formatPatientDisplayName(patient, admission)}</b></td></tr>
                         <tr><td class="info-label">Age/Sex</td><td>: ${(() => {
                             const patientDob = patient?.dob || patient?.profile?.dob || patient?.patientDetails?.dob || patient?.dateOfBirth || patient?.user?.dateOfBirth;
-                            const encounterDate = admission?.admissionDate || admission?.createdAt || reportData?.date || new Date();
-                            const ageCalc = calculateExactAge(patientDob, new Date(encounterDate));
-                            const ageText = ageCalc.display !== "N/A"
-                                ? (ageCalc.years >= 2 ? `${ageCalc.years} Y` : ageCalc.shortDisplay)
-                                : (patient?.age || patient?.profile?.age ? `${patient?.age || patient?.profile?.age} ${patient?.ageUnit || patient?.profile?.ageUnit || patient?.patientDetails?.ageUnit || 'Y'}` : '');
-                            const genderText = patient?.gender || patient?.profile?.gender || patient?.patientDetails?.gender || patient?.user?.gender
-                                ? (patient?.gender || patient?.profile?.gender || patient?.patientDetails?.gender || patient?.user?.gender).charAt(0).toUpperCase() + (patient?.gender || patient?.profile?.gender || patient?.patientDetails?.gender || patient?.user?.gender).slice(1)
-                                : '';
+                            const rawAge = patient?.age || patient?.profile?.age || patient?.patientDetails?.age || patient?.user?.age;
+                            const rawAgeUnit = patient?.ageUnit || patient?.profile?.ageUnit || patient?.patientDetails?.ageUnit || patient?.user?.ageUnit;
+                            const computedAge = computeAgeFromDob(patientDob, rawAge, rawAgeUnit);
+                            const ageText = (computedAge && computedAge !== "N/A") ? computedAge : "";
+                            const rawGender = patient?.gender || patient?.profile?.gender || patient?.patientDetails?.gender || patient?.user?.gender || "";
+                            const genderText = rawGender
+                                ? rawGender.charAt(0).toUpperCase() + rawGender.slice(1).toLowerCase()
+                                : "";
                             return [ageText, genderText].filter(Boolean).join(' / ') || 'N/A';
                         })()}</td></tr>
                         <tr><td class="info-label">S/W/D</td><td>: ${(() => {

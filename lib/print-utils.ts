@@ -110,19 +110,35 @@ export const computeAgeFromDob = (dob: any, fallbackAge: any, fallbackUnit: any)
 
       if (ageYears > 0) {
         if (ageMonths > 0 && ageYears < 5) {
-          return `${ageYears} Years ${ageMonths} Months`;
+          return `${ageYears} ${ageYears === 1 ? 'Year' : 'Years'} ${ageMonths} ${ageMonths === 1 ? 'Month' : 'Months'}`;
         }
-        return `${ageYears} Years`;
+        return `${ageYears} ${ageYears === 1 ? 'Year' : 'Years'}`;
       }
-      if (ageMonths > 0) return `${ageMonths} Months`;
-      if (ageDays > 0) return `${ageDays} Days`;
+      if (ageMonths > 0) {
+        return `${ageMonths} ${ageMonths === 1 ? 'Month' : 'Months'}`;
+      }
+      if (ageDays > 0) {
+        return `${ageDays} ${ageDays === 1 ? 'Day' : 'Days'}`;
+      }
       return "0 Days";
     }
   }
   if (fallbackAge !== undefined && fallbackAge !== null && fallbackAge !== "-" && fallbackAge !== "" && fallbackAge !== "N/A") {
-    const unit = fallbackUnit ? (fallbackUnit === 'Months' ? 'Months' : fallbackUnit === 'Days' ? 'Days' : 'Years') : 'Years';
-    // if fallbackAge already has Y/Mos/Days, just return it
-    if (String(fallbackAge).match(/(Y|Mos|Days|Month|Day|Yr|Yrs)$/i)) return String(fallbackAge);
+    const fallbackStr = String(fallbackAge).trim();
+    // Normalize short format e.g. "1D", "19D", "2M", "5Y"
+    const dMatch = fallbackStr.match(/^(\d+)\s*d(ays?)?$/i);
+    if (dMatch) return `${dMatch[1]} ${dMatch[1] === '1' ? 'Day' : 'Days'}`;
+    const mMatch = fallbackStr.match(/^(\d+)\s*m(os?|onths?)?$/i);
+    if (mMatch) return `${mMatch[1]} ${mMatch[1] === '1' ? 'Month' : 'Months'}`;
+    const yMatch = fallbackStr.match(/^(\d+)\s*y(rs?|ears?)?$/i);
+    if (yMatch) return `${yMatch[1]} ${yMatch[1] === '1' ? 'Year' : 'Years'}`;
+
+    const rawUnit = String(fallbackUnit || '').trim().toLowerCase();
+    const unit = rawUnit.startsWith('d') ? (fallbackStr === '1' ? 'Day' : 'Days') :
+                 rawUnit.startsWith('m') ? (fallbackStr === '1' ? 'Month' : 'Months') :
+                 (fallbackStr === '1' ? 'Year' : 'Years');
+                 
+    if (fallbackStr.match(/(Y|Mos|Days|Month|Day|Yr|Yrs|Years|Months)$/i)) return fallbackStr;
     return `${fallbackAge} ${unit}`;
   }
   return "N/A";

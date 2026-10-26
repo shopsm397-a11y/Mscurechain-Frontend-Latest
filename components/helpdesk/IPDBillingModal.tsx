@@ -33,6 +33,7 @@ import { printIPDLedger } from '@/lib/utils/print-ipd-ledger';
 import { printPaymentReceipt } from '@/lib/utils/print-payment-receipt';
 import { formatPatientNameWithPrefix } from '@/lib/utils/name-utils';
 import { hospitalAdminService } from '@/lib/integrations/services/hospitalAdmin.service';
+import { computeAgeFromDob } from '@/lib/print-utils';
 
 interface IPDBillingModalProps {
     isOpen: boolean;
@@ -157,15 +158,18 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                 const patientObj = admissionDetails.patient || {};
                 const profileObj = admissionDetails.patientProfile || {};
                 
-                const calcAge = (dob: any) => {
-                    if (!dob) return null;
-                    const diff = Date.now() - new Date(dob).getTime();
-                    return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
-                };
+                const patientDob = data.dob || data.patientDob || patientObj.dob || profileObj.dob || admissionDetails.dob || patientObj.dateOfBirth || profileObj.dateOfBirth || patientObj.user?.dateOfBirth || patientObj.user?.dob;
+                const fallbackAge = patientObj.age ?? profileObj.age ?? data.patientAge ?? data.age;
+                const fallbackUnit = patientObj.ageUnit || profileObj.ageUnit || data.patientAgeUnit || data.ageUnit || "Years";
+                const resolvedAge = computeAgeFromDob(patientDob, fallbackAge, fallbackUnit);
 
+                data.dob = patientDob;
+                data.patientDob = patientDob;
+                data.patient = patientObj;
+                data.patientProfile = profileObj;
                 data.mrn = data.mrn || patientObj.mrn || profileObj.mrn || admissionDetails.mrn || "";
-                data.patientAge = data.patientAge ?? patientObj.age ?? profileObj.age ?? calcAge(patientObj.dateOfBirth) ?? calcAge(profileObj.dateOfBirth) ?? "";
-                data.patientAgeUnit = data.patientAgeUnit || patientObj.ageUnit || profileObj.ageUnit || "Y";
+                data.patientAge = (resolvedAge && resolvedAge !== "N/A") ? resolvedAge : (fallbackAge || "");
+                data.patientAgeUnit = fallbackUnit;
                 data.patientGender = data.patientGender || patientObj.gender || profileObj.gender || "";
                 data.patientHonorific = data.patientHonorific || data.honorific || patientObj.honorific || profileObj.honorific || patientObj.user?.honorific || patientObj.honorificTitle || "";
                 data.patientAddress = data.patientAddress || patientObj.address || profileObj.address || "";
@@ -199,15 +203,18 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                         const patientObj = admissionDetails.patient || {};
                         const profileObj = admissionDetails.patientProfile || {};
                         
-                        const calcAge = (dob: any) => {
-                            if (!dob) return null;
-                            const diff = Date.now() - new Date(dob).getTime();
-                            return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
-                        };
+                        const patientDob = data.dob || data.patientDob || patientObj.dob || profileObj.dob || admissionDetails.dob || patientObj.dateOfBirth || profileObj.dateOfBirth || patientObj.user?.dateOfBirth || patientObj.user?.dob;
+                        const fallbackAge = patientObj.age ?? profileObj.age ?? data.patientAge ?? data.age;
+                        const fallbackUnit = patientObj.ageUnit || profileObj.ageUnit || data.patientAgeUnit || data.ageUnit || "Years";
+                        const resolvedAge = computeAgeFromDob(patientDob, fallbackAge, fallbackUnit);
 
+                        data.dob = patientDob;
+                        data.patientDob = patientDob;
+                        data.patient = patientObj;
+                        data.patientProfile = profileObj;
                         data.mrn = data.mrn || patientObj.mrn || profileObj.mrn || admissionDetails.mrn || "";
-                        data.patientAge = data.patientAge ?? patientObj.age ?? profileObj.age ?? calcAge(patientObj.dateOfBirth) ?? calcAge(profileObj.dateOfBirth) ?? "";
-                        data.patientAgeUnit = data.patientAgeUnit || patientObj.ageUnit || profileObj.ageUnit || "Y";
+                        data.patientAge = (resolvedAge && resolvedAge !== "N/A") ? resolvedAge : (fallbackAge || "");
+                        data.patientAgeUnit = fallbackUnit;
                         data.patientGender = data.patientGender || patientObj.gender || profileObj.gender || "";
                         data.patientHonorific = data.patientHonorific || data.honorific || patientObj.honorific || profileObj.honorific || patientObj.user?.honorific || patientObj.honorificTitle || "";
                         data.patientAddress = data.patientAddress || patientObj.address || profileObj.address || "";
