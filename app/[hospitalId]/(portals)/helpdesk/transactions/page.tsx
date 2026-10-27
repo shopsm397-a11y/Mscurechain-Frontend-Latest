@@ -1709,13 +1709,26 @@ export default function TransactionsPage() {
 
                     if (isDischargeTx) {
                         // For an IPD discharge bill, strictly match transactions tied to this specific admission
-                        const sameAdmission = Boolean(
-                            (targetAdmissionId && (t.referenceId?.admissionId === targetAdmissionId || t.admissionId === targetAdmissionId || t.referenceId === targetAdmissionId)) ||
-                            (targetApptId && (t.referenceId?._id === targetApptId || t.referenceId === targetApptId || t.referenceId?.appointmentId === targetApptId))
-                        );
-                        if (sameAdmission) return true;
+                        if (targetAdmissionId) {
+                            return Boolean(
+                                t.referenceId?.admissionId === targetAdmissionId ||
+                                t.admissionId === targetAdmissionId ||
+                                t.referenceId === targetAdmissionId ||
+                                t.transactionId === targetAdmissionId ||
+                                (t.referenceNode && t.referenceNode === targetAdmissionId)
+                            );
+                        }
 
-                        // Fallback matching for same patient: MUST be an IPD admission/advance/discharge transaction, NOT OPD/Lab/Consultation
+                        if (targetApptId) {
+                            return Boolean(
+                                t.referenceId?._id === targetApptId ||
+                                t.referenceId === targetApptId ||
+                                t.referenceId?.appointmentId === targetApptId ||
+                                t._id === targetApptId
+                            );
+                        }
+
+                        // Only fallback to matching patient if no targetAdmissionId exists at all
                         const sameMrn = Boolean(resolvedMrn && resolvedMrn !== 'N/A' && (t.patientMRN === resolvedMrn || t.referenceId?.mrn === resolvedMrn));
                         const sameName = cleanPatientName(t.patientName || '').toUpperCase() === cleanPatientName(previewTx.patientName || '').toUpperCase();
                         const tType = (t.type || t.serviceType || '').toLowerCase();
@@ -1725,8 +1738,15 @@ export default function TransactionsPage() {
                         return (sameMrn || sameName) && isIpdSpecific && !isNonIpd;
                     }
 
-                    const sameAdmission = (apptData._id && (t.referenceId?._id === apptData._id || t.referenceId === apptData._id)) ||
-                                         (apptData.admissionId && (t.referenceId?.admissionId === apptData.admissionId || t.admissionId === apptData.admissionId));
+                    if (apptData.admissionId) {
+                        return Boolean(
+                            t.referenceId?.admissionId === apptData.admissionId ||
+                            t.admissionId === apptData.admissionId ||
+                            t.referenceId === apptData.admissionId
+                        );
+                    }
+
+                    const sameAdmission = (apptData._id && (t.referenceId?._id === apptData._id || t.referenceId === apptData._id));
                     const sameMrn = (resolvedMrn && resolvedMrn !== 'N/A' && (t.patientMRN === resolvedMrn || t.referenceId?.mrn === resolvedMrn));
                     const sameName = cleanPatientName(t.patientName || '').toUpperCase() === cleanPatientName(previewTx.patientName || '').toUpperCase();
                     return sameAdmission || sameMrn || (sameName && (t.type || '').toLowerCase().includes('ipd'));
