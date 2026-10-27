@@ -255,7 +255,7 @@ export const formatPatientNameWithPrefix = (
   // If honorific was not explicitly passed, check if name already has an embedded honorific
   if (!normHonorific && name) {
     const trimmedName = name.trim();
-    const match = trimmedName.match(/^(baby\s+of(\s*\(b\/o\))?|baby|b\/o|mr|mrs|ms|miss|master|dr|prof)\.?\s+/i);
+    const match = trimmedName.match(/^(baby\s+of(\s*\(b\/o\))?|baby|b\/o|mr|mrs|ms|miss|master|dr|prof|shri|smt|kumari|late|s\/o|d\/o|w\/o|h\/o|c\/o)\.?\s+/i);
     if (match) {
       normHonorific = normalizeHonorific(match[1]);
     }
@@ -288,6 +288,9 @@ export const formatPatientDisplayName = (
   const rawName = 
     patient?.name || 
     patient?.user?.name || 
+    patient?.patientDetails?.name ||
+    patient?.patient?.name ||
+    patient?.profile?.name ||
     appointment?.patientDetails?.name || 
     appointment?.patientName || 
     "Unnamed Patient";
@@ -300,15 +303,34 @@ export const formatPatientDisplayName = (
   // 1. Check appointment honorific snapshot (highest priority for historical accuracy)
   const appHonorific = 
     appointment?.appointmentHonorific || 
+    appointment?.patientHonorific ||
+    appointment?.patientPrefix ||
     appointment?.honorific || 
-    appointment?.patientDetails?.honorific;
+    appointment?.prefix ||
+    appointment?.patientDetails?.honorific ||
+    appointment?.patientDetails?.prefix;
 
   // 2. Check patient master honorific
   const patientHonorific = 
     patient?.honorific || 
+    patient?.prefix || 
     patient?.profile?.honorific || 
+    patient?.profile?.prefix || 
     patient?.user?.honorific || 
-    patient?.honorificTitle;
+    patient?.user?.prefix || 
+    patient?.patientDetails?.honorific ||
+    patient?.patientDetails?.prefix ||
+    patient?.patient?.honorific ||
+    patient?.patient?.prefix ||
+    patient?.patientHonorific || 
+    patient?.patientPrefix || 
+    patient?.honorificTitle || 
+    patient?.salutation ||
+    patient?.title ||
+    patient?.admission?.patientHonorific ||
+    patient?.admission?.honorific ||
+    patient?.activeAdmission?.patientHonorific ||
+    patient?.activeAdmission?.honorific;
 
   const finalHonorific = appHonorific || patientHonorific;
   return formatPatientNameWithPrefix(rawName, finalHonorific, uppercase, includeHonorific);

@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Plus, Trash2, FileText, Stethoscope, Bed, Pill, Wrench, FlaskConical, CreditCard, Printer, Calendar, Search, Activity, RefreshCw, UserCheck, Save, UserCog } from 'lucide-react';
 import { hospitalAdminService } from '@/lib/integrations/services/hospitalAdmin.service';
 import { helpdeskService } from '@/lib/integrations/services/helpdesk.service';
+import { ipdService } from '@/lib/integrations/services/ipd.service';
 import { renderToStaticMarkup } from 'react-dom/server';
 import MainHeader from '@/components/printers/MainHeader';
 import MainFooter from '@/components/printers/MainFooter';
@@ -17,16 +18,44 @@ import toast from 'react-hot-toast';
 import PatientSearchDropdown from '@/components/shared/PatientSearchDropdown';
 import { apiClient } from '@/lib/integrations/api/apiClient';
 
-interface DoctorCharge { id: string; code?: string; doctorName: string; specialization: string; rate: number; visits: number; amount?: number; }
-interface AdmissionCharge { id: string; code?: string; chargeType: string; description: string; rate: number; days: number; amount?: number; }
-interface MedCharge { id: string; code?: string; medicineName: string; rate: number; quantity: number; amount?: number; }
-interface ServiceCharge { id: string; code?: string; serviceName: string; rate: number; quantity: number; amount?: number; }
-interface DiagCharge { id: string; code?: string; testName: string; rate: number; quantity: number; amount?: number; category?: 'investigation' | 'radiology'; }
+interface DoctorCharge { id: string; code?: string; date?: string; doctorName: string; specialization: string; rate: number; visits: number; amount?: number; }
+interface AdmissionCharge { id: string; code?: string; date?: string; chargeType: string; description: string; rate: number; days: number | string; amount?: number; }
+interface MedCharge { id: string; code?: string; date?: string; medicineName: string; rate: number; quantity: number; amount?: number; }
+interface ServiceCharge { id: string; code?: string; date?: string; serviceName: string; rate: number; quantity: number; amount?: number; }
+interface DiagCharge { id: string; code?: string; date?: string; testName: string; rate: number; quantity: number; amount?: number; category?: 'investigation' | 'radiology'; }
 interface Payment { id: string; receiptNo: string; date: string; mode: string; status: string; amount: number; paymentDetails?: { cash?: number; upi?: number; card?: number; bankTransfer?: number; }; }
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const genReceipt = () => 'RCP-' + Date.now().toString().slice(-7);
 const fmt = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+export const formatDateTimeWithBrackets = (d: any): string => {
+    if (!d) return '-';
+    if (typeof d === 'string') {
+        const trimmed = d.trim();
+        if (/\([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?\s*(?:AM|PM|am|pm)?\)/i.test(trimmed)) {
+            return trimmed;
+        }
+        const match = trimmed.match(/^(.*?)\s+([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?\s*(?:AM|PM|am|pm)?)$/i);
+        if (match) {
+            return `${match[1]} (${match[2]})`;
+        }
+    }
+    try {
+        const date = new Date(d);
+        if (isNaN(date.getTime())) return typeof d === 'string' ? d : '-';
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        let hours = date.getHours();
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        const strHours = String(hours).padStart(2, '0');
+        return `${String(date.getDate()).padStart(2, '0')}-${months[date.getMonth()]}-${date.getFullYear()} (${strHours}:${minutes} ${ampm})`;
+    } catch {
+        return typeof d === 'string' ? d : '-';
+    }
+};
 
 export const cleanString = (val: any, fallback: string = ''): string => {
     if (!val) return fallback;
@@ -51,43 +80,111 @@ export const cleanString = (val: any, fallback: string = ''): string => {
     return String(val);
 };
 
-export const normalizeDoctor = (d: any, idx: number = 0): DoctorCharge => ({
-    id: d?.id || d?._id || uid(),
-    code: cleanString(d?.code || d?.serviceCode || (d?._id ? `DOC${d._id.toString().slice(-6).toUpperCase()}` : `DOC${idx + 1}`)),
-    doctorName: cleanString(d?.doctorName || d?.name || d?.serviceName, 'Doctor Consultation'),
-    specialization: cleanString(d?.specialization, 'Consultant'),
-    rate: Number(d?.rate !== undefined ? d?.rate : (d?.amount || 0)),
-    visits: Number(d?.visits !== undefined ? d?.visits : (d?.quantity || 1)),
-    amount: Number(d?.amount !== undefined ? d?.amount : (Number(d?.rate || 0) * Number(d?.visits || d?.quantity || 1))),
-});
+export const normalizeDoctor = (d: any, idx: number = 0): DoctorCharge => {
+    let doctorName = cleanString(d?.doctorName || d?.name || d?.serviceName, 'Doctor Consultation');
+    let amount = Number(d?.amount !== undefined ? d?.amount : (Number(d?.rate || 0) * Number(d?.visits || d?.quantity || 1)));
+    let visits = Number(d?.visits !== undefined && d?.visits > 0 ? d.visits : (d?.quantity || 1));
+    let rate = Number(d?.rate !== undefined ? d?.rate : (visits > 0 ? amount / visits : amount));
 
-export const normalizeAdmission = (a: any, idx: number = 0): AdmissionCharge => ({
-    id: a?.id || a?._id || uid(),
-    code: cleanString(a?.code || a?.chargeCode || (a?._id ? `BED${a._id.toString().slice(-6).toUpperCase()}` : `BED${idx + 1}`)),
-    chargeType: cleanString(a?.chargeType, 'Admission'),
-    description: cleanString(a?.description || a?.roomType || a?.bedType, 'Stay Charges'),
-    rate: Number(a?.rate !== undefined ? a?.rate : (a?.amount || 0)),
-    days: Number(a?.days !== undefined ? a?.days : (a?.quantity || 1)),
-    amount: Number(a?.amount !== undefined ? a?.amount : (Number(a?.rate || 0) * Number(a?.days || a?.quantity || 1))),
-});
+    const qtyMatch = doctorName.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+    if (qtyMatch) {
+        const parsedQty = parseFloat(qtyMatch[1]);
+        if (!isNaN(parsedQty) && parsedQty > 0) {
+            visits = parsedQty;
+            rate = amount / parsedQty;
+            doctorName = doctorName.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+        }
+    } else if (d?.quantity && Number(d.quantity) > 1 && visits === 1) {
+        visits = Number(d.quantity);
+        rate = amount / visits;
+    }
 
-export const normalizeMed = (m: any, idx: number = 0): MedCharge => ({
-    id: m?.id || m?._id || uid(),
-    code: cleanString(m?.code || m?.itemCode || (m?._id ? `MED${m._id.toString().slice(-6).toUpperCase()}` : `MED${idx + 1}`)),
-    medicineName: cleanString(m?.medicineName || m?.name, 'Medicine'),
-    rate: Number(m?.rate !== undefined ? m?.rate : (m?.amount || 0)),
-    quantity: Number(m?.quantity !== undefined ? m?.quantity : 1),
-    amount: Number(m?.amount !== undefined ? m?.amount : (Number(m?.rate || 0) * Number(m?.quantity || 1))),
-});
+    return {
+        id: d?.id || d?._id || uid(),
+        code: cleanString(d?.code || d?.serviceCode || (d?._id ? `DOC${d._id.toString().slice(-6).toUpperCase()}` : `DOC${idx + 1}`)),
+        date: d?.date || d?.dateTime || d?.createdAt || '',
+        doctorName,
+        specialization: cleanString(d?.specialization, 'Consultant'),
+        rate: Math.round(rate * 100) / 100,
+        visits,
+        amount,
+    };
+};
 
-export const normalizeService = (s: any, idx: number = 0): ServiceCharge => ({
-    id: s?.id || s?._id || uid(),
-    code: cleanString(s?.code || s?.serviceCode || (s?._id ? `SVC${s._id.toString().slice(-6).toUpperCase()}` : `SVC${idx + 1}`)),
-    serviceName: cleanString(s?.serviceName || s?.name || s?.description, 'Service Charge'),
-    rate: Number(s?.rate !== undefined ? s?.rate : (s?.amount || 0)),
-    quantity: Number(s?.quantity !== undefined ? s?.quantity : 1),
-    amount: Number(s?.amount !== undefined ? s?.amount : (Number(s?.rate || 0) * Number(s?.quantity || 1))),
-});
+export const normalizeAdmission = (a: any, idx: number = 0): AdmissionCharge => {
+    let desc = cleanString(a?.description || a?.roomType || a?.bedType, 'Stay Charges');
+    let amount = Number(a?.amount !== undefined ? a?.amount : (Number(a?.rate || 0) * (typeof a?.days === 'number' ? a.days : 1)));
+    let days: number | string = a?.days !== undefined ? a.days : (a?.quantity || 1);
+    let rate = Number(a?.rate !== undefined ? a?.rate : (typeof days === 'number' && days > 0 ? amount / days : (a?.amount || 0)));
+
+    return {
+        id: a?.id || a?._id || uid(),
+        code: cleanString(a?.code || a?.chargeCode || (a?._id ? `BED${a._id.toString().slice(-6).toUpperCase()}` : `BED${idx + 1}`)),
+        date: a?.date || a?.startDate || a?.admissionDate || a?.createdAt || '',
+        chargeType: cleanString(a?.chargeType, 'Admission'),
+        description: desc,
+        rate,
+        days,
+        amount,
+    };
+};
+
+export const normalizeMed = (m: any, idx: number = 0): MedCharge => {
+    let medicineName = cleanString(m?.medicineName || m?.name, 'Medicine');
+    let amount = Number(m?.amount !== undefined ? m?.amount : (Number(m?.rate || 0) * Number(m?.quantity || 1)));
+    let quantity = Number(m?.quantity !== undefined && m?.quantity > 0 ? m.quantity : 1);
+    let rate = Number(m?.rate !== undefined ? m?.rate : (quantity > 0 ? amount / quantity : amount));
+
+    const qtyMatch = medicineName.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+    if (qtyMatch) {
+        const parsedQty = parseFloat(qtyMatch[1]);
+        if (!isNaN(parsedQty) && parsedQty > 0) {
+            quantity = parsedQty;
+            rate = amount / parsedQty;
+            medicineName = medicineName.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+        }
+    }
+
+    return {
+        id: m?.id || m?._id || uid(),
+        code: cleanString(m?.code || m?.itemCode || (m?._id ? `MED${m._id.toString().slice(-6).toUpperCase()}` : `MED${idx + 1}`)),
+        date: m?.date || m?.dateTime || m?.createdAt || '',
+        medicineName,
+        rate: Math.round(rate * 100) / 100,
+        quantity,
+        amount,
+    };
+};
+
+export const normalizeService = (s: any, idx: number = 0): ServiceCharge => {
+    let serviceName = cleanString(s?.serviceName || s?.name || s?.description, 'Service Charge');
+    let amount = Number(s?.amount !== undefined ? s?.amount : (Number(s?.rate || 0) * Number(s?.quantity || 1)));
+    let quantity = Number(s?.quantity !== undefined && s?.quantity > 0 ? s.quantity : 1);
+    let rate = Number(s?.rate !== undefined ? s?.rate : (quantity > 0 ? amount / quantity : amount));
+
+    const qtyMatch = serviceName.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+    if (qtyMatch) {
+        const parsedQty = parseFloat(qtyMatch[1]);
+        if (!isNaN(parsedQty) && parsedQty > 0) {
+            quantity = parsedQty;
+            rate = amount / parsedQty;
+            serviceName = serviceName.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+        }
+    } else if (s?.quantity && Number(s.quantity) > 1 && quantity === 1) {
+        quantity = Number(s.quantity);
+        rate = amount / quantity;
+    }
+
+    return {
+        id: s?.id || s?._id || uid(),
+        code: cleanString(s?.code || s?.serviceCode || (s?._id ? `SVC${s._id.toString().slice(-6).toUpperCase()}` : `SVC${idx + 1}`)),
+        date: s?.date || s?.dateTime || s?.createdAt || '',
+        serviceName,
+        rate: Math.round(rate * 100) / 100,
+        quantity,
+        amount,
+    };
+};
 
 export const normalizeDiag = (d: any, idx: number = 0, defaultCategory: 'investigation' | 'radiology' = 'investigation'): DiagCharge => {
     const isRad = defaultCategory === 'radiology' ||
@@ -97,11 +194,209 @@ export const normalizeDiag = (d: any, idx: number = 0, defaultCategory: 'investi
     return {
         id: d?.id || d?._id || uid(),
         code: cleanString(d?.code || d?.testCode || (d?._id ? (isRad ? `RAD${d._id.toString().slice(-6).toUpperCase()}` : `LAB${d._id.toString().slice(-6).toUpperCase()}`) : (isRad ? `RAD${idx + 1}` : `LAB${idx + 1}`))),
+        date: d?.date || d?.dateTime || d?.createdAt || '',
         testName: cleanString(d?.testName || d?.name || d?.description || d?.serviceName || d?.test, isRad ? 'Radiology Scan' : 'Lab Test'),
         rate: Number(d?.rate !== undefined ? d?.rate : (d?.cost !== undefined ? d?.cost : (d?.amount !== undefined ? d?.amount : 0))),
         quantity: Number(d?.quantity !== undefined ? d?.quantity : 1),
         amount: Number(d?.amount !== undefined ? d?.amount : (Number(d?.rate || d?.cost || 0) * Number(d?.quantity || 1))),
         category: isRad ? 'radiology' : 'investigation',
+    };
+};
+
+export const mapBillSummaryToState = (summary: any, targetAdmission: any) => {
+    if (!summary) return null;
+    const extraItems = summary?.extraCharges?.items || [];
+    const bedItems = summary?.bedCharges?.items || [];
+    const advanceItems = summary?.advances || [];
+
+    const mappedDocs: DoctorCharge[] = [];
+    const mappedAdms: AdmissionCharge[] = [];
+    const mappedMeds: MedCharge[] = [];
+    const mappedSvcs: ServiceCharge[] = [];
+    const mappedDiags: DiagCharge[] = [];
+
+    // 1. Bed items
+    bedItems.forEach((item: any, idx: number) => {
+        let durationQty: string = item.readableDuration || `${Number((item.days || 1).toFixed(2))} Days`;
+        durationQty = durationQty
+            .replace(/Day\(s\)\s*/gi, 'Days, ')
+            .replace(/Hour\(s\)/gi, 'Hours')
+            .replace(/Mins/gi, 'Mins')
+            .trim();
+        if (durationQty.endsWith(',')) durationQty = durationQty.slice(0, -1);
+
+        mappedAdms.push({
+            id: uid(),
+            code: `BED${idx + 1}`,
+            date: item.startDate || targetAdmission?.admissionDate || summary?.admissionDate || '',
+            chargeType: item.type || 'Admission',
+            description: `${item.type || 'Ward'} Stay Charges`,
+            rate: item.rate || 0,
+            days: durationQty,
+            amount: item.charge || 0,
+        });
+    });
+
+    // 2. Extra charges
+    extraItems.forEach((item: any, idx: number) => {
+        if (item.status === 'Reversed') return;
+        const itemDate = item.date || item.createdAt || targetAdmission?.admissionDate || '';
+        const itemAmount = Number(item.amount || 0);
+
+        // Lab / Diagnostics
+        if (['Lab', 'Diagnostics'].includes(item.category)) {
+            if (item.tests && Array.isArray(item.tests) && item.tests.length > 0) {
+                const testCount = item.tests.length;
+                const totalAmount = itemAmount;
+                item.tests.forEach((test: any, tIdx: number) => {
+                    const testName = typeof test === 'string' ? test : (test.testName || test.test?.testName || test.test?.name || test.name || 'Test');
+                    let testPrice = totalAmount / testCount;
+                    if (typeof test === 'object') {
+                        const possiblePrices = [test.cost, test.price, test.amount, test.testPrice, test.test?.price, test.test?.cost];
+                        const found = possiblePrices.find(p => p !== undefined && p !== null);
+                        if (found !== undefined) testPrice = Number(found);
+                    }
+                    const testCode = (typeof test === 'object' && test._id) ? test._id.toString().substring(0, 7).toUpperCase() : `LAB${idx + 1}_${tIdx + 1}`;
+                    mappedDiags.push({
+                        id: uid(),
+                        code: testCode,
+                        date: test.date || test.createdAt || itemDate,
+                        testName: cleanString(testName, 'Lab Test'),
+                        rate: testPrice,
+                        quantity: 1,
+                        amount: testPrice,
+                        category: 'investigation',
+                    });
+                });
+            } else {
+                mappedDiags.push({
+                    id: uid(),
+                    code: item.code || `LAB${idx + 1}`,
+                    date: itemDate,
+                    testName: cleanString(item.description || item.name, 'Diagnostics'),
+                    rate: itemAmount,
+                    quantity: 1,
+                    amount: itemAmount,
+                    category: 'investigation',
+                });
+            }
+            return;
+        }
+
+        // Pharmacy
+        if (['Pharmacy', 'Medicine'].includes(item.category)) {
+            if (item.medicines && Array.isArray(item.medicines) && item.medicines.length > 0) {
+                item.medicines.forEach((med: any, mIdx: number) => {
+                    const medAmount = med.amount || (parseFloat(med.quantity || '1') * (med.rate || med.price || 0));
+                    mappedMeds.push({
+                        id: uid(),
+                        code: item._id ? `MED${item._id.toString().slice(-6).toUpperCase()}_${mIdx + 1}` : `MED${idx + 1}_${mIdx + 1}`,
+                        date: med.date || med.createdAt || itemDate,
+                        medicineName: cleanString(med.medicineName || med.name, 'Medicine'),
+                        rate: med.rate || med.price || medAmount,
+                        quantity: med.quantity || 1,
+                        amount: medAmount,
+                    });
+                });
+            } else {
+                mappedMeds.push({
+                    id: uid(),
+                    code: item._id ? `MED${item._id.toString().slice(-6).toUpperCase()}` : `MED${idx + 1}`,
+                    date: itemDate,
+                    medicineName: cleanString(item.description || item.name, 'Medicine'),
+                    rate: itemAmount,
+                    quantity: 1,
+                    amount: itemAmount,
+                });
+            }
+            return;
+        }
+
+        // Doctor / Consultation
+        if (['Doctor Fee', 'Consultation'].includes(item.category)) {
+            let docName = cleanString(item.description || item.doctorName || item.serviceName, 'Doctor Consultation');
+            let docQty = item.quantity || 1;
+            let docRate = itemAmount;
+            const qtyMatch = docName.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+            if (qtyMatch) {
+                const parsed = parseFloat(qtyMatch[1]);
+                if (!isNaN(parsed) && parsed > 0) {
+                    docQty = parsed;
+                    docRate = itemAmount / parsed;
+                    docName = docName.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+                }
+            }
+            mappedDocs.push({
+                id: uid(),
+                code: item.code || `DOC${idx + 1}`,
+                date: itemDate,
+                doctorName: docName,
+                specialization: item.specialization || 'Pediatrician',
+                rate: docRate,
+                visits: docQty,
+                amount: itemAmount,
+            });
+            return;
+        }
+
+        // Radiology
+        if (['Radiology'].includes(item.category)) {
+            mappedDiags.push({
+                id: uid(),
+                code: item.code || `RAD${idx + 1}`,
+                date: itemDate,
+                testName: cleanString(item.description || item.name, 'Radiology Procedure'),
+                rate: itemAmount,
+                quantity: 1,
+                amount: itemAmount,
+                category: 'radiology',
+            });
+            return;
+        }
+
+        // Service Charges (Default)
+        let svcName = cleanString(item.description || item.serviceName || item.category, 'Service');
+        let svcQty: number | string = item.quantity || 1;
+        let svcRate = itemAmount;
+        const qtyMatch = svcName.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+        if (qtyMatch) {
+            const parsed = parseFloat(qtyMatch[1]);
+            if (!isNaN(parsed) && parsed > 0) {
+                svcQty = parsed;
+                svcRate = itemAmount / parsed;
+                svcName = svcName.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+            }
+        }
+        mappedSvcs.push({
+            id: uid(),
+            code: item.code || (item._id ? `SVC${item._id.toString().slice(-6).toUpperCase()}` : `SVC${idx + 1}`),
+            date: itemDate,
+            serviceName: svcName,
+            rate: svcRate,
+            quantity: svcQty as any,
+            amount: itemAmount,
+        });
+    });
+
+    // 3. Payments
+    const mappedPay: Payment[] = advanceItems.map((adv: any, i: number) => ({
+        id: adv._id || uid(),
+        receiptNo: adv.reference || `REC${String(i + 1).padStart(5, '0')}`,
+        date: adv.date || adv.createdAt || Date.now(),
+        mode: adv.mode || 'Cash',
+        status: (!adv.transactionType || adv.transactionType.toLowerCase() === 'advance') ? 'Paid' : adv.transactionType,
+        amount: Number(adv.amount || 0),
+        paymentDetails: adv.paymentDetails || undefined,
+    }));
+
+    return {
+        doctors: mappedDocs,
+        admissions: mappedAdms,
+        meds: mappedMeds,
+        services: mappedSvcs,
+        diags: mappedDiags,
+        payments: mappedPay,
+        discount: Number(summary?.financials?.discount || 0),
     };
 };
 
@@ -669,28 +964,52 @@ export default function TransactionReportsPage() {
             const targetAdmission = ipdRecord || availableEncounters.ipd;
             if (targetAdmission) setAdmission(targetAdmission);
             try {
-                const ipdBill = await helpdeskService.getIPDFinalBill(patientId);
-                if (Array.isArray(ipdBill) && ipdBill.length > 0) {
-                    const r = ipdBill[0];
-                    setDoctors((r.reportData?.doctors || []).map(normalizeDoctor));
-                    setAdmis((r.reportData?.admissions || []).map(normalizeAdmission));
-                    setMeds((r.reportData?.meds || []).map(normalizeMed));
-                    setServices((r.reportData?.services || []).map(normalizeService));
-                    setDiags([
-                        ...(r.reportData?.diags || []).map((x: any, i: number) => normalizeDiag(x, i, 'investigation')),
-                        ...(r.reportData?.rads || []).map((x: any, i: number) => normalizeDiag(x, i, 'radiology'))
-                    ]);
-                    setPay(r.reportData?.payments || []);
-                    setDiscount(r.totals?.discount || 0);
-                    if (r.admission) setAdmission(r.admission);
-                } else {
-                    setDoctors([]);
-                    setAdmis([]);
-                    setMeds([]);
-                    setServices([]);
-                    setDiags([]);
-                    setPay([]);
-                    setDiscount(0);
+                const admId = targetAdmission?._id || targetAdmission?.admissionId;
+                let loaded = false;
+                if (admId) {
+                    try {
+                        const billSummary = await ipdService.getBillSummary(admId);
+                        if (billSummary && (billSummary.extraCharges || billSummary.bedCharges)) {
+                            const mapped = mapBillSummaryToState(billSummary, targetAdmission);
+                            if (mapped) {
+                                setDoctors(mapped.doctors);
+                                setAdmis(mapped.admissions);
+                                setMeds(mapped.meds);
+                                setServices(mapped.services);
+                                setDiags(mapped.diags);
+                                setPay(mapped.payments);
+                                setDiscount(mapped.discount);
+                                loaded = true;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("Failed to get billSummary directly:", e);
+                    }
+                }
+                if (!loaded) {
+                    const ipdBill = await helpdeskService.getIPDFinalBill(patientId);
+                    if (Array.isArray(ipdBill) && ipdBill.length > 0) {
+                        const r = ipdBill[0];
+                        setDoctors((r.reportData?.doctors || []).map(normalizeDoctor));
+                        setAdmis((r.reportData?.admissions || []).map(normalizeAdmission));
+                        setMeds((r.reportData?.meds || []).map(normalizeMed));
+                        setServices((r.reportData?.services || []).map(normalizeService));
+                        setDiags([
+                            ...(r.reportData?.diags || []).map((x: any, i: number) => normalizeDiag(x, i, 'investigation')),
+                            ...(r.reportData?.rads || []).map((x: any, i: number) => normalizeDiag(x, i, 'radiology'))
+                        ]);
+                        setPay(r.reportData?.payments || []);
+                        setDiscount(r.totals?.discount || 0);
+                        if (r.admission) setAdmission(r.admission);
+                    } else {
+                        setDoctors([]);
+                        setAdmis([]);
+                        setMeds([]);
+                        setServices([]);
+                        setDiags([]);
+                        setPay([]);
+                        setDiscount(0);
+                    }
                 }
 
                 // Query dedicated DischargeSummary database model for this patient and admission
@@ -882,7 +1201,7 @@ export default function TransactionReportsPage() {
     }, [patientId, fetchHistory]);
 
     const totDoc = doctors.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.visits), 0);
-    const totAdm = admissions.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.days), 0);
+    const totAdm = admissions.reduce((s, r) => s + (r.amount != null ? r.amount : (r.rate * (typeof r.days === 'number' ? r.days : 1))), 0);
     const totMed = meds.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.quantity), 0);
     const totSvc = services.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.quantity), 0);
     const totDiag = diags.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.quantity), 0);
@@ -1112,7 +1431,17 @@ export default function TransactionReportsPage() {
     };
 
     const updD = (i: number, k: keyof DoctorCharge, v: any) => setDoctors(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'visits') nx.amount = nx.rate * nx.visits; return nx; }));
-    const updA = (i: number, k: keyof AdmissionCharge, v: any) => setAdmis(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'days') nx.amount = nx.rate * nx.days; return nx; }));
+    const updA = (i: number, k: keyof AdmissionCharge, v: any) => setAdmis(p => p.map((x, j) => {
+        if (j !== i) return x;
+        const nx = { ...x, [k]: v };
+        if (k === 'rate' || k === 'days') {
+            const numDays = typeof nx.days === 'number' ? nx.days : parseFloat(String(nx.days));
+            if (!isNaN(numDays) && numDays > 0) {
+                nx.amount = nx.rate * numDays;
+            }
+        }
+        return nx;
+    }));
     const updM = (i: number, k: keyof MedCharge, v: any) => setMeds(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'quantity') nx.amount = nx.rate * nx.quantity; return nx; }));
     const updS = (i: number, k: keyof ServiceCharge, v: any) => setServices(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'quantity') nx.amount = nx.rate * nx.quantity; return nx; }));
     const updDiag = (i: number, k: keyof DiagCharge, v: any) => setDiags(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'quantity') nx.amount = nx.rate * nx.quantity; return nx; }));
@@ -1445,13 +1774,14 @@ export default function TransactionReportsPage() {
 
                     <div className="grid grid-cols-1 gap-4">
                         {printConfig.consultations && (
-                            <Card icon={<Stethoscope className="w-4 h-4" />} title="Doctor Consultation Charges" color="indigo" total={totDoc} onAdd={() => setDoctors(p => [...p, { id: uid(), code: `DOC${p.length + 1}`, doctorName: '', specialization: '', rate: 0, visits: 1 }])}>
+                            <Card icon={<Stethoscope className="w-4 h-4" />} title="Doctor Consultation Charges" color="indigo" total={totDoc} onAdd={() => setDoctors(p => [...p, { id: uid(), code: `DOC${p.length + 1}`, date: new Date().toISOString(), doctorName: '', specialization: '', rate: 0, visits: 1 }])}>
                                 <table className="w-full text-left">
-                                    <thead><tr>{['Doctor Name', 'Specialization', 'Rate (₹)', 'Visits', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
+                                    <thead><tr>{['Doctor Name', 'Date / Time', 'Specialization', 'Rate (₹)', 'Visits', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
                                     <tbody>
                                         {doctors.map((d, i) => (
                                             <tr key={i}>
                                                 <td className="p-1"><input value={d.doctorName || ''} onChange={(e) => updD(i, 'doctorName', e.target.value)} className={tableInputClass} placeholder="Doctor Name" /></td>
+                                                <td className="p-1 whitespace-nowrap"><span className="text-[10px] font-bold text-slate-600 px-2 py-1.5 bg-slate-50 rounded-lg whitespace-nowrap block">{formatDateTimeWithBrackets(d.date || admission?.admissionDate)}</span></td>
                                                 <td className="p-1"><input value={d.specialization || ''} onChange={(e) => updD(i, 'specialization', e.target.value)} className={tableInputClass} placeholder="Specialization" /></td>
                                                 <td className="p-1"><input type="number" min={0} value={d.rate === 0 ? '' : d.rate} onChange={(e) => updD(i, 'rate', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="0" /></td>
                                                 <td className="p-1"><input type="number" min={0} value={d.visits === 0 ? '' : d.visits} onChange={(e) => updD(i, 'visits', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="1" /></td>
@@ -1465,9 +1795,9 @@ export default function TransactionReportsPage() {
                         )}
 
                         {patientType !== 'OPD' && printConfig.wards && (
-                            <Card icon={<Bed className="w-4 h-4" />} title="Admission & ICU Stay" color="indigo" total={totAdm} onAdd={() => setAdmis(p => [...p, { id: uid(), code: `BED${p.length + 1}`, chargeType: 'Stay', description: '', rate: 0, days: 1 }])}>
+                            <Card icon={<Bed className="w-4 h-4" />} title="Admission & ICU Stay" color="indigo" total={totAdm} onAdd={() => setAdmis(p => [...p, { id: uid(), code: `BED${p.length + 1}`, date: new Date().toISOString(), chargeType: 'Stay', description: '', rate: 0, days: 1 }])}>
                                 <table className="w-full text-left">
-                                    <thead><tr>{['Charge Type', 'Description', 'Rate (₹)', 'Days', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
+                                    <thead><tr>{['Charge Type', 'Date / Time', 'Description', 'Rate (₹)', 'Days', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
                                     <tbody>
                                         {admissions.map((a, i) => (
                                             <tr key={i}>
@@ -1476,10 +1806,23 @@ export default function TransactionReportsPage() {
                                                         {['Admission', 'ICU', 'Ward', 'Emergency', 'OT'].map(c => <option key={c} value={c}>{c}</option>)}
                                                     </select>
                                                 </td>
+                                                <td className="p-1 whitespace-nowrap"><span className="text-[10px] font-bold text-slate-600 px-2 py-1.5 bg-slate-50 rounded-lg whitespace-nowrap block">{formatDateTimeWithBrackets(a.date || admission?.admissionDate)}</span></td>
                                                 <td className="p-1"><input value={a.description || ''} onChange={(e) => updA(i, 'description', e.target.value)} className={tableInputClass} placeholder="Description" /></td>
                                                 <td className="p-1"><input type="number" min={0} value={a.rate === 0 ? '' : a.rate} onChange={(e) => updA(i, 'rate', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="0" /></td>
-                                                <td className="p-1"><input type="number" min={0} value={a.days === 0 ? '' : a.days} onChange={(e) => updA(i, 'days', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="1" /></td>
-                                                <td className="p-1 px-3 text-xs font-black text-slate-700">{fmt(a.amount != null ? a.amount : a.rate * a.days)}</td>
+                                                <td className="p-1">
+                                                    <input 
+                                                        type="text" 
+                                                        value={a.days === 0 ? '' : (a.days ?? '')} 
+                                                        onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            const numVal = parseFloat(val);
+                                                            updA(i, 'days', (!isNaN(numVal) && String(numVal) === val.trim()) ? numVal : val);
+                                                        }} 
+                                                        className={tableInputClass} 
+                                                        placeholder="1" 
+                                                    />
+                                                </td>
+                                                <td className="p-1 px-3 text-xs font-black text-slate-700">{fmt(a.amount != null ? a.amount : (a.rate * (typeof a.days === 'number' ? a.days : 1)))}</td>
                                                 <td className="p-1 text-right"><DelBtn onClick={() => setAdmis(p => p.filter((_, j) => j !== i))} /></td>
                                             </tr>
                                         ))}
@@ -1489,13 +1832,14 @@ export default function TransactionReportsPage() {
                         )}
 
                         {printConfig.pharmacy && (
-                            <Card icon={<Pill className="w-4 h-4" />} title="Pharmacy" color="indigo" total={totMed} onAdd={() => setMeds(p => [...p, { id: uid(), code: `MED${p.length + 1}`, medicineName: '', rate: 0, quantity: 1 }])}>
+                            <Card icon={<Pill className="w-4 h-4" />} title="Pharmacy" color="indigo" total={totMed} onAdd={() => setMeds(p => [...p, { id: uid(), code: `MED${p.length + 1}`, date: new Date().toISOString(), medicineName: '', rate: 0, quantity: 1 }])}>
                                 <table className="w-full text-left">
-                                    <thead><tr>{['Medicine Name', 'Rate (₹)', 'Quantity', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
+                                    <thead><tr>{['Medicine Name', 'Date / Time', 'Rate (₹)', 'Quantity', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
                                     <tbody>
                                         {meds.map((m, i) => (
                                             <tr key={i}>
                                                 <td className="p-1"><input value={m.medicineName || ''} onChange={(e) => updM(i, 'medicineName', e.target.value)} className={tableInputClass} placeholder="Medicine Name" /></td>
+                                                <td className="p-1 whitespace-nowrap"><span className="text-[10px] font-bold text-slate-600 px-2 py-1.5 bg-slate-50 rounded-lg whitespace-nowrap block">{formatDateTimeWithBrackets(m.date || admission?.admissionDate)}</span></td>
                                                 <td className="p-1"><input type="number" min={0} value={m.rate === 0 ? '' : m.rate} onChange={(e) => updM(i, 'rate', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="0" /></td>
                                                 <td className="p-1"><input type="number" min={0} value={m.quantity === 0 ? '' : m.quantity} onChange={(e) => updM(i, 'quantity', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="1" /></td>
                                                 <td className="p-1 px-3 text-xs font-black text-slate-700">{fmt(m.amount != null ? m.amount : m.rate * m.quantity)}</td>
@@ -1508,13 +1852,14 @@ export default function TransactionReportsPage() {
                         )}
 
                         {printConfig.services && (
-                            <Card icon={<Wrench className="w-4 h-4" />} title="Services" color="indigo" total={totSvc} onAdd={() => setServices(p => [...p, { id: uid(), code: `SVC${p.length + 1}`, serviceName: '', rate: 0, quantity: 1 }])}>
+                            <Card icon={<Wrench className="w-4 h-4" />} title="Services" color="indigo" total={totSvc} onAdd={() => setServices(p => [...p, { id: uid(), code: `SVC${p.length + 1}`, date: new Date().toISOString(), serviceName: '', rate: 0, quantity: 1 }])}>
                                 <table className="w-full text-left">
-                                    <thead><tr>{['Service Name', 'Rate (₹)', 'Quantity', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
+                                    <thead><tr>{['Service Name', 'Date / Time', 'Rate (₹)', 'Quantity', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
                                     <tbody>
                                         {services.map((s, i) => (
                                             <tr key={i}>
                                                 <td className="p-1"><input value={s.serviceName || ''} onChange={(e) => updS(i, 'serviceName', e.target.value)} className={tableInputClass} placeholder="Service Name" /></td>
+                                                <td className="p-1 whitespace-nowrap"><span className="text-[10px] font-bold text-slate-600 px-2 py-1.5 bg-slate-50 rounded-lg whitespace-nowrap block">{formatDateTimeWithBrackets(s.date || admission?.admissionDate)}</span></td>
                                                 <td className="p-1"><input type="number" min={0} value={s.rate === 0 ? '' : s.rate} onChange={(e) => updS(i, 'rate', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="0" /></td>
                                                 <td className="p-1"><input type="number" min={0} value={s.quantity === 0 ? '' : s.quantity} onChange={(e) => updS(i, 'quantity', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="1" /></td>
                                                 <td className="p-1 px-3 text-xs font-black text-slate-700">{fmt(s.amount != null ? s.amount : s.rate * s.quantity)}</td>
@@ -1527,9 +1872,9 @@ export default function TransactionReportsPage() {
                         )}
 
                         {(printConfig.investigations || printConfig.radiology) && (
-                            <Card icon={<FlaskConical className="w-4 h-4" />} title={`Diagnostics ${!printConfig.investigations ? '(Radiology Only)' : !printConfig.radiology ? '(Investigations Only)' : ''}`} color="indigo" total={totDiagActive} onAdd={() => setDiags(p => [...p, { id: uid(), code: printConfig.investigations ? `LAB${p.length + 1}` : `RAD${p.length + 1}`, testName: '', rate: 0, quantity: 1, category: printConfig.investigations ? 'investigation' : 'radiology' }])}>
+                            <Card icon={<FlaskConical className="w-4 h-4" />} title={`Diagnostics ${!printConfig.investigations ? '(Radiology Only)' : !printConfig.radiology ? '(Investigations Only)' : ''}`} color="indigo" total={totDiagActive} onAdd={() => setDiags(p => [...p, { id: uid(), code: printConfig.investigations ? `LAB${p.length + 1}` : `RAD${p.length + 1}`, date: new Date().toISOString(), testName: '', rate: 0, quantity: 1, category: printConfig.investigations ? 'investigation' : 'radiology' }])}>
                                 <table className="w-full text-left">
-                                    <thead><tr>{['Test / Scan Name', 'Type', 'Rate (₹)', 'Quantity', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
+                                    <thead><tr>{['Test / Scan Name', 'Date / Time', 'Type', 'Rate (₹)', 'Quantity', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
                                     <tbody>
                                         {visibleDiags.map((d, i) => {
                                             const realIndex = diags.findIndex(item => item.id === d.id);
@@ -1537,6 +1882,7 @@ export default function TransactionReportsPage() {
                                             return (
                                                 <tr key={d.id || i}>
                                                     <td className="p-1"><input value={d.testName || ''} onChange={(e) => updDiag(idx, 'testName', e.target.value)} className={tableInputClass} placeholder="Test Name" /></td>
+                                                    <td className="p-1 whitespace-nowrap"><span className="text-[10px] font-bold text-slate-600 px-2 py-1.5 bg-slate-50 rounded-lg whitespace-nowrap block">{formatDateTimeWithBrackets(d.date || admission?.admissionDate)}</span></td>
                                                     <td className="p-1">
                                                         <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${d.category === 'radiology' ? 'bg-purple-50 text-purple-600 border border-purple-100' : 'bg-blue-50 text-blue-600 border border-blue-100'}`}>
                                                             {d.category === 'radiology' ? 'Radiology' : 'Investigation'}
@@ -1555,14 +1901,14 @@ export default function TransactionReportsPage() {
                         )}
 
                         {printConfig.receipts && (
-                            <Card icon={<CreditCard className="w-4 h-4" />} title="Payments" color="emerald" total={totPaid} onAdd={() => setPay(p => [...p, { id: uid(), receiptNo: genReceipt(), date: new Date().toLocaleDateString(), amount: 0, mode: 'Cash', status: 'Paid' }])}>
+                            <Card icon={<CreditCard className="w-4 h-4" />} title="Payments" color="emerald" total={totPaid} onAdd={() => setPay(p => [...p, { id: uid(), receiptNo: genReceipt(), date: new Date().toISOString(), amount: 0, mode: 'Cash', status: 'Paid' }])}>
                                 <table className="w-full text-left">
-                                    <thead><tr>{['Receipt No.', 'Date', 'Payment Mode', 'Status', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
+                                    <thead><tr>{['Receipt No.', 'Date / Time', 'Payment Mode', 'Status', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
                                     <tbody>
                                         {payments.map((p, i) => (
                                             <tr key={i}>
                                                 <td className="p-1"><span className="px-2 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-black font-mono tracking-tight border border-indigo-100 flex items-center justify-center">{p.receiptNo}</span></td>
-                                                <td className="p-1"><input value={p.date} onChange={(e) => updP(i, 'date', e.target.value)} className={tableInputClass} /></td>
+                                                <td className="p-1"><input value={p.date.includes('(') ? p.date : formatDateTimeWithBrackets(p.date)} onChange={(e) => updP(i, 'date', e.target.value)} className={tableInputClass} /></td>
                                                 <td className="p-1">
                                                     <select value={p.mode} onChange={(e) => updP(i, 'mode', e.target.value)} className={tableSelectClass}>
                                                         {['Cash', 'Card', 'UPI', 'Bank', 'Mixed'].map(m => <option key={m}>{m}</option>)}

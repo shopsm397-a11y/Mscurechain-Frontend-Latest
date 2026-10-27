@@ -40,7 +40,7 @@ import MainHeader from '@/components/printers/MainHeader';
 import MainFooter from '@/components/printers/MainFooter';
 import { hospitalAdminService } from '@/lib/integrations/services/hospitalAdmin.service';
 import { generateClinicalReceiptHtml, computeAgeFromDob } from "@/lib/print-utils";
-import { formatDoctorName, formatPatientNameWithPrefix, GUARDIAN_RELATIONS, HONORIFIC_OPTIONS, getHospitalHonorificOptions, getHospitalHonorificItems, addHospitalCustomHonorific, cleanHonorificPrefix } from "@/lib/utils/name-utils";
+import { formatDoctorName, formatPatientNameWithPrefix, formatPatientDisplayName, GUARDIAN_RELATIONS, HONORIFIC_OPTIONS, getHospitalHonorificOptions, getHospitalHonorificItems, addHospitalCustomHonorific, cleanHonorificPrefix } from "@/lib/utils/name-utils";
 import ClinicalReceipt from "@/components/helpdesk/ClinicalReceipt";
 
 export default function AppointmentBooking() {
@@ -1910,6 +1910,25 @@ export default function AppointmentBooking() {
                                                             const lastVisitVitals = full.lastVisit?.vitals || {};
                                                             const patientUserId = full.user?._id || profileData.user || full._id || p._id;
 
+                                                            const patientHonorific =
+                                                                profileData.honorific ||
+                                                                profileData.prefix ||
+                                                                full.honorific ||
+                                                                full.prefix ||
+                                                                full.user?.honorific ||
+                                                                full.user?.prefix ||
+                                                                p.honorific ||
+                                                                p.prefix ||
+                                                                full.patientHonorific ||
+                                                                full.activeAdmission?.patientHonorific ||
+                                                                full.activeAdmission?.honorific ||
+                                                                '';
+
+                                                            if (patientHonorific) {
+                                                                setConfirmedHonorific(patientHonorific);
+                                                                setPendingHonorific(patientHonorific);
+                                                            }
+
                                                             setSelectedPatient({
                                                                 ...profileData,
                                                                 _id: patientUserId,
@@ -1917,7 +1936,8 @@ export default function AppointmentBooking() {
                                                                 patientId: patientUserId,
                                                                 userId: patientUserId,
                                                                 name: full.user?.name || full.name || profileData.name,
-                                                                honorific: profileData.honorific || full.honorific || full.user?.honorific || '',
+                                                                honorific: patientHonorific,
+                                                                prefix: patientHonorific,
                                                                 mobile: full.user?.mobile || profileData.contactNumber || full.mobile || 'N/A',
                                                                 mrn: full.mrn || profileData.mrn || 'CC-' + String(patientUserId).slice(-6).toUpperCase(),
                                                                 gender: profileData.gender || full.gender || 'N/A',
@@ -1975,7 +1995,7 @@ export default function AppointmentBooking() {
                                                                 {p.name?.charAt(0) || p.user?.name?.charAt(0)}
                                                             </div>
                                                             <div>
-                                                                <p className="text-xs font-bold text-slate-900 uppercase">{p.name || p.user?.name}</p>
+                                                                <p className="text-xs font-bold text-slate-900 uppercase">{formatPatientDisplayName(p)}</p>
                                                                 <div className="flex items-center gap-2 mt-0.5">
                                                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{p.mobile || p.user?.mobile} • {p.mrn}</p>
                                                                     {p.activeAdmission && (

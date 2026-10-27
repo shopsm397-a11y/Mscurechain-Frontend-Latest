@@ -25,6 +25,27 @@ function numberToWords(num: number): string {
     return str.trim();
 }
 
+const formatDateTime = (dateVal: any): string => {
+    if (!dateVal) return '-';
+    if (typeof dateVal === 'string') {
+        const trimmed = dateVal.trim();
+        if (/\([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?\s*(?:AM|PM|am|pm)?\)/i.test(trimmed)) {
+            return trimmed;
+        }
+        const match = trimmed.match(/^(.*?)\s+([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?\s*(?:AM|PM|am|pm)?)$/i);
+        if (match) {
+            return `${match[1]} (${match[2]})`;
+        }
+    }
+    try {
+        const d = new Date(dateVal);
+        if (isNaN(d.getTime())) return typeof dateVal === 'string' ? dateVal : '-';
+        return `${format(d, 'dd-MMM-yyyy')} (${format(d, 'hh:mm a')})`;
+    } catch {
+        return typeof dateVal === 'string' ? dateVal : '-';
+    }
+};
+
 export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { format?: 'summary' | 'detailed' } = { format: 'detailed' }) => {
     const isSummary = options.format === 'summary';
     // Determine components
@@ -71,6 +92,7 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
                     const medAmount = med.amount || (parseFloat(med.quantity || '1') * (med.rate || med.price || 0));
                     categories[catIndex].items.push({
                         code: item._id?.toString()?.substring(0, 7).toUpperCase() || 'ITEM' + Math.floor(Math.random() * 9000 + 1000),
+                        dateTime: med.date || med.createdAt || item.date || item.createdAt,
                         name: med.medicineName || med.name || 'Unknown Medicine',
                         rate: med.rate || med.price || medAmount,
                         qty: med.quantity || 1,
@@ -110,6 +132,7 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
 
                     categories[catIndex].items.push({
                         code: testCode,
+                        dateTime: test.date || test.createdAt || item.date || item.createdAt,
                         name: testName,
                         rate: testPrice,
                         qty: 1,
@@ -121,24 +144,53 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
             }
 
             // ── DEFAULT: Single line item (Consultation, Service, Radiology, etc.) ──
+            let itemQty: number | string = item.quantity || 1;
+            let itemAmount = Number(item.amount || 0);
+            let itemRate = Number(item.rate !== undefined && item.rate !== null && item.rate > 0 ? item.rate : itemAmount);
+            let itemName = String(item.description || item.category || 'Service').trim();
+
+            // Extract (Qty/Days: X) or (Qty: X) or (Days: X)
+            const qtyMatch = itemName.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+            if (qtyMatch) {
+                const parsedQty = parseFloat(qtyMatch[1]);
+                if (!isNaN(parsedQty) && parsedQty > 0) {
+                    itemQty = parsedQty;
+                    itemRate = itemAmount / parsedQty;
+                    itemName = itemName.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+                }
+            } else if (item.quantity && Number(item.quantity) > 1) {
+                itemQty = Number(item.quantity);
+                itemRate = Number(item.rate) || (itemAmount / itemQty);
+            }
+
             categories[catIndex].items.push({
                 code: item.code || item._id?.toString()?.substring(0, 7).toUpperCase() || 'SER' + Math.floor(Math.random() * 900 + 100),
-                name: item.description || item.category,
-                rate: item.amount || 0,
-                qty: item.quantity || 1,
-                amount: item.amount || 0
+                dateTime: item.date || item.createdAt,
+                name: itemName,
+                rate: itemRate,
+                qty: itemQty,
+                amount: itemAmount
             });
-            categories[catIndex].total += (item.amount || 0);
+            categories[catIndex].total += itemAmount;
         }
     });
 
     bedItems.forEach((item: any) => {
         const catIndex = categories.findIndex((c: any) => c.name === 'Ward Charges');
+        let durationQty: string = item.readableDuration || `${Number((item.days || 1).toFixed(2))} Days`;
+        durationQty = durationQty
+            .replace(/Day\(s\)\s*/gi, 'Days, ')
+            .replace(/Hour\(s\)/gi, 'Hours')
+            .replace(/Mins/gi, 'Mins')
+            .trim();
+        if (durationQty.endsWith(',')) durationQty = durationQty.slice(0, -1);
+
         categories[catIndex].items.push({
             code: 'SG' + Math.floor(Math.random() * 900 + 1000),
-            name: `${item.type} CHARGES${item.readableDuration ? ` (${item.readableDuration})` : ''}`,
+            dateTime: item.startDate || summary.admissionDate,
+            name: `${item.type} CHARGES`,
             rate: item.rate,
-            qty: Number((item.days || 1).toFixed(2)),
+            qty: durationQty,
             amount: item.charge
         });
         categories[catIndex].total += (item.charge || 0);
@@ -511,11 +563,12 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
             <thead>
                 <tr>
                     <th style="width: 5%;">S.No</th>
-                    <th style="width: 15%;">Code</th>
-                    <th style="width: 40%;">Service Name</th>
-                    <th class="right" style="width: 15%;">Rate</th>
-                    <th class="right" style="width: 10%;">Qty</th>
-                    <th class="right" style="width: 15%;">Amount</th>
+                    <th style="width: 12%;">Code</th>
+                    <!-- <th style="width: 17%;">Date / Time</th> -->
+                    <th style="width: 47%;">Service Name</th>
+                    <th class="right" style="width: 12%;">Rate</th>
+                    <th class="right" style="width: 12%;">Qty</th>
+                    <th class="right" style="width: 12%;">Amount</th>
                 </tr>
             </thead>
             <tbody>
@@ -524,6 +577,7 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
                         <tr>
                             <td>${idx + 1}</td>
                             <td>-</td>
+                            <!-- <td>-</td> -->
                             <td style="font-weight: bold; color: #1e293b;">${cat.name}</td>
                             <td class="right"></td>
                             <td class="right"></td>
@@ -539,9 +593,10 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
                             <tr>
                                 <td>${idx + 1}</td>
                                 <td>${item.code}</td>
+                                <!-- <td style="font-size: 8.5px; white-space: nowrap;">${formatDateTime(item.dateTime || item.date || item.createdAt || summary?.admissionDate)}</td> -->
                                 <td>${item.name}</td>
                                 <td class="right">${Number(item.rate).toFixed(2)}</td>
-                                <td class="right">${Number(item.qty).toFixed(2)}</td>
+                                <td class="right">${typeof item.qty === 'string' ? item.qty : Number(item.qty).toFixed(2)}</td>
                                 <td class="right">${Number(item.amount).toFixed(2)}</td>
                             </tr>
                         `).join('')}
@@ -565,18 +620,18 @@ export const printIPDLedger = (summary: any, hospitalDetails?: any, options: { f
                     <table class="receipt-table">
                         <thead>
                             <tr>
-                                <th style="width: 8%;">S.No</th>
-                                <th style="width: 25%;">Record Date</th>
-                                <th style="width: 27%;">Receipt No</th>
+                                <th style="width: 6%;">S.No</th>
+                                <th style="width: 28%;">Date / Time</th>
+                                <th style="width: 25%;">Receipt No</th>
                                 <th class="right" style="width: 25%;">Amount Paid</th>
-                                <th style="width: 15%;">Status</th>
+                                <th style="width: 16%;">Status</th>
                             </tr>
                         </thead>
                         <tbody>
                             ${advanceItems.map((adv: any, i: number) => `
                                 <tr>
                                     <td>${i + 1}</td>
-                                    <td>${format(new Date(adv.date), 'dd-MMM-yyyy')}</td>
+                                    <td style="font-size: 8.5px; white-space: nowrap;">${formatDateTime(adv.date || adv.createdAt || adv.dateTime)}</td>
                                     <td>${adv.reference || 'REC' + Math.floor(Math.random() * 900000 + 100000)}</td>
                                     <td class="right">${Number(adv.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${adv.mode})</td>
                                     <td>${(!adv.transactionType || adv.transactionType.toLowerCase() === 'advance') ? 'Paid' : adv.transactionType}</td>

@@ -515,6 +515,17 @@ export const ipdService = {
       method: "DELETE",
     }),
 
+  mergeExtraCharges: (data: {
+    primaryChargeId: string;
+    mergeChargeIds: string[];
+    mergedDescription: string;
+    mergedAmount: number;
+  }) =>
+    apiClient<any>(IPD_ENDPOINTS.BILLING.CHARGE_MERGE, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
   addAdvancePayment: (data: {
     admissionId: string;
     amount: number;

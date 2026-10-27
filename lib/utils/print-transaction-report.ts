@@ -38,6 +38,34 @@ const formatDate = (d: any) => {
     return `${String(date.getDate()).padStart(2, '0')}-${months[date.getMonth()]}-${date.getFullYear()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 };
 
+const formatDateTime = (d: any) => {
+    if (!d) return '-';
+    if (typeof d === 'string') {
+        const trimmed = d.trim();
+        if (/\([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?\s*(?:AM|PM|am|pm)?\)/i.test(trimmed)) {
+            return trimmed;
+        }
+        const match = trimmed.match(/^(.*?)\s+([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?\s*(?:AM|PM|am|pm)?)$/i);
+        if (match) {
+            return `${match[1]} (${match[2]})`;
+        }
+    }
+    try {
+        const date = new Date(d);
+        if (isNaN(date.getTime())) return typeof d === 'string' ? d : '-';
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        let hours = date.getHours();
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        const strHours = String(hours).padStart(2, '0');
+        return `${String(date.getDate()).padStart(2, '0')}-${months[date.getMonth()]}-${date.getFullYear()} (${strHours}:${minutes} ${ampm})`;
+    } catch {
+        return typeof d === 'string' ? d : '-';
+    }
+};
+
 export const generateTransactionReportHTML = (
     hospital: any,
     patient: any,
@@ -254,11 +282,12 @@ export const generateTransactionReportHTML = (
             <thead>
                 <tr>
                     <th style="width: 5%">S.No</th>
-                    <th style="width: 15%">Code</th>
-                    <th style="width: 45%">Service Name</th>
+                    <th style="width: 12%">Code</th>
+                    <!-- <th style="width: 16%">Date / Time</th> -->
+                    <th style="width: 51%">Service Name</th>
                     <th class="right" style="width: 10%">Rate</th>
                     <th class="right" style="width: 10%">Qty</th>
-                    <th class="right" style="width: 15%">Amount</th>
+                    <th class="right" style="width: 12%">Amount</th>
                 </tr>
             </thead>
             <tbody>
@@ -296,11 +325,26 @@ export const generateTransactionReportHTML = (
         let subtotal = 0;
         
         items.forEach((item, idx) => {
-            const amount = item.amount || (item.rate * (item.quantity || item.visits || item.days || 1));
+            const rawQty = item.quantity || item.visits || item.days || 1;
+            const displayQty = typeof rawQty === 'string' ? rawQty : fmt(rawQty);
+            const amount = item.amount || (item.rate * (typeof rawQty === 'number' ? rawQty : 1));
             subtotal += amount;
-            const rawName = title.toLowerCase().includes('consultation')
+            let rawName = title.toLowerCase().includes('consultation')
                 ? (item.serviceName || item.doctorName || 'Doctor Consultation')
                 : (item.testName || item.serviceName || item.doctorName || item.chargeType || item.medicineName || item.description || 'Service');
+
+            let itemRate = item.rate;
+            let itemQtyDisplay = displayQty;
+            const qtyMatch = String(rawName).match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+            if (qtyMatch) {
+                const parsedQty = parseFloat(qtyMatch[1]);
+                if (!isNaN(parsedQty) && parsedQty > 0) {
+                    itemQtyDisplay = fmt(parsedQty);
+                    itemRate = amount / parsedQty;
+                    rawName = String(rawName).replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+                }
+            }
+
             const displayName = title.toLowerCase().includes('consultation')
                 ? formatDoctorName(cleanStr(rawName, 'Doctor Consultation'))
                 : cleanStr(rawName, 'Service');
@@ -319,13 +363,17 @@ export const generateTransactionReportHTML = (
                 itemCode = prefix === 'BED' ? `BED${idx + 1}` : `${prefix}${idSuffix}`;
             }
 
+            const itemDateVal = item.date || item.dateTime || item.createdAt || item.startDate || admission?.admissionDate;
+            const itemDateTimeFormatted = formatDateTime(itemDateVal);
+
             rowHtml += `
                 <tr>
                     <td class="center">${idx + 1}</td>
                     <td>${itemCode}</td>
+                    <!-- <td style="font-size: 9px; white-space: nowrap;">${itemDateTimeFormatted}</td> -->
                     <td>${displayName}</td>
-                    <td class="right">${fmt(item.rate)}</td>
-                    <td class="right">${fmt(item.quantity || item.visits || item.days || 1)}</td>
+                    <td class="right">${fmt(itemRate)}</td>
+                    <td class="right">${itemQtyDisplay}</td>
                     <td class="right">${fmt(amount)}</td>
                 </tr>
             `;
@@ -391,16 +439,16 @@ export const generateTransactionReportHTML = (
                 <div style="border-bottom: 1px solid #000; font-weight: bold; margin-bottom: 6px; padding-bottom: 3px; font-size: 12px;">Receipt Details :</div>
                 <table style="width:100%; border-collapse: collapse; font-size: 11px;">
                     <colgroup>
-                        <col style="width: 6%;">
+                        <col style="width: 5%;">
+                        <col style="width: 25%;">
+                        <col style="width: 26%;">
+                        <col style="width: 26%; text-align: right;">
                         <col style="width: 18%;">
-                        <col style="width: 30%;">
-                        <col style="width: 22%; text-align: right;">
-                        <col style="width: 12%;">
                     </colgroup>
                     <thead>
                         <tr style="border-top: 1.5px solid #000; border-bottom: 1.5px solid #000; background-color: #fafafa;">
                             <th style="padding: 5px 4px; font-weight: bold; text-align: left;">S.No</th>
-                            <th style="padding: 5px 4px; font-weight: bold; text-align: left;">Record Date</th>
+                            <th style="padding: 5px 4px; font-weight: bold; text-align: left;">Date / Time</th>
                             <th style="padding: 5px 4px; font-weight: bold; text-align: left;">Receipt No</th>
                             <th style="padding: 5px 4px; font-weight: bold; text-align: right;">Amount Payment</th>
                             <th style="padding: 5px 4px; font-weight: bold; text-align: left;">Status</th>
@@ -432,7 +480,7 @@ export const generateTransactionReportHTML = (
                 html += `
                     <tr>
                         <td style="padding: 4px 4px; text-align: center;">${idx + 1}</td>
-                        <td style="padding: 4px 4px;">${p.date || formatDate(new Date())}</td>
+                        <td style="padding: 4px 4px; font-size: 9.5px; white-space: nowrap;">${formatDateTime(p.date || p.createdAt || p.paymentDate)}</td>
                         <td style="padding: 4px 4px;">${p.receiptNo || p.receiptNumber || '-'}</td>
                         <td style="padding: 4px 4px; text-align: right;">${fmt(Number(p.amount || 0))}</td>
                         <td style="padding: 4px 4px;">${modeText}</td>

@@ -63,7 +63,7 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
     const [advanceData, setAdvanceData] = useState({ amount: 0, mode: 'Cash', transactionType: 'Advance', reference: '' });
     const [discountData, setDiscountData] = useState({ amount: 0, reason: '' });
     const [editingChargeId, setEditingChargeId] = useState<string | null>(null);
-    const [editChargeData, setEditChargeData] = useState({ category: 'Nursing', description: '', amount: 0 });
+    const [editChargeData, setEditChargeData] = useState({ category: 'Nursing', description: '', amount: 0, quantity: 1 });
     const [editingBedChargeId, setEditingBedChargeId] = useState<string | null>(null);
     const [editBedRate, setEditBedRate] = useState<number>(0);
 
@@ -75,6 +75,123 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
     const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null);
     const [isAddingCategory, setIsAddingCategory] = useState(false);
     const [updatingCategoryId, setUpdatingCategoryId] = useState<string | null>(null);
+
+    // ── Merge Feature State ──────────────────────────────────────────────
+    const [showMergeModal, setShowMergeModal] = useState(false);
+    const [mergeGroups, setMergeGroups] = useState<{ baseName: string; category: string; items: any[]; totalAmount: number; mergedDesc: string }[]>([]);
+    const [isMerging, setIsMerging] = useState(false);
+
+    /** Parse a duration string inside parentheses into total minutes.
+     *  Recognises patterns: (Qty/Days:N), (NDAYSmHOURSnMINS), (NHOURS), (NMINS) etc. */
+    const parseDurationToMins = (desc: string): { baseName: string; totalMins: number; isQty: boolean; qtyVal: number } => {
+        const qtyMatch = desc.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+        if (qtyMatch) {
+            const qty = parseFloat(qtyMatch[1]);
+            const base = desc.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+            return { baseName: base, totalMins: qty * 24 * 60, isQty: true, qtyVal: qty };
+        }
+        const durMatch = desc.match(/\(([^)]+)\)\s*$/);
+        if (durMatch) {
+            const inner = durMatch[1];
+            const days = inner.match(/(\d+)\s*DAYS?/i)?.[1] || '0';
+            const hours = inner.match(/(\d+)\s*HOURS?/i)?.[1] || '0';
+            const mins = inner.match(/(\d+)\s*MIN/i)?.[1] || '0';
+            const totalMins = parseInt(days) * 24 * 60 + parseInt(hours) * 60 + parseInt(mins);
+            if (totalMins > 0) {
+                const base = desc.replace(/\s*\([^)]+\)\s*$/, '').trim();
+                return { baseName: base, totalMins, isQty: false, qtyVal: 0 };
+            }
+        }
+        return { baseName: desc.trim(), totalMins: 0, isQty: false, qtyVal: 0 };
+    };
+
+    const formatMinsToReadable = (totalMins: number): string => {
+        const d = Math.floor(totalMins / (24 * 60));
+        const h = Math.floor((totalMins % (24 * 60)) / 60);
+        const m = totalMins % 60;
+        const parts: string[] = [];
+        if (d > 0) parts.push(`${d}DAYS`);
+        if (h > 0) parts.push(`${h}HOURS`);
+        if (m > 0) parts.push(`${m}MINS`);
+        return parts.length > 0 ? parts.join(' ') : '0HOURS';
+    };
+
+    /** Detects groups of ≥2 charges sharing the same base name (case-insensitive). */
+    const detectMergeGroups = (items: any[]) => {
+        const grouped: Record<string, any[]> = {};
+        items.forEach((item: any) => {
+            if (item.status === 'Reversed') return;
+            const { baseName } = parseDurationToMins(item.description || '');
+            const key = baseName.toUpperCase();
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(item);
+        });
+        const groups: typeof mergeGroups = [];
+        Object.entries(grouped).forEach(([, grpItems]) => {
+            if (grpItems.length < 2) return;
+            const totalAmount = grpItems.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
+            const { baseName, isQty } = parseDurationToMins(grpItems[0].description || '');
+            let mergedDesc: string;
+            if (isQty) {
+                const totalQty = grpItems.reduce((s: number, i: any) => {
+                    const { qtyVal } = parseDurationToMins(i.description || '');
+                    return s + (qtyVal || 1);
+                }, 0);
+                mergedDesc = `${baseName} (Qty/Days: ${totalQty})`;
+            } else {
+                const totalMins = grpItems.reduce((s: number, i: any) => s + parseDurationToMins(i.description || '').totalMins, 0);
+                mergedDesc = totalMins > 0 ? `${baseName} (${formatMinsToReadable(totalMins)})` : baseName;
+            }
+            groups.push({ baseName, category: grpItems[0].category || 'Nursing', items: grpItems, totalAmount, mergedDesc });
+        });
+        setMergeGroups(groups);
+    };
+
+    const handleMergeGroup = async (group: typeof mergeGroups[0]) => {
+        if (isMerging) return;
+        try {
+            setIsMerging(true);
+            // Primary = first charge (largest amount), merge rest into it
+            const [primary, ...secondaries] = group.items;
+            await ipdService.mergeExtraCharges({
+                primaryChargeId: primary._id,
+                mergeChargeIds: secondaries.map((s: any) => s._id),
+                mergedDescription: group.mergedDesc,
+                mergedAmount: group.totalAmount,
+            });
+            toast.success(`Merged ${group.items.length} charges → "${group.mergedDesc}"`);
+            setShowMergeModal(false);
+            fetchSummary();
+        } catch (error: any) {
+            toast.error(error.message || 'Failed to merge charges');
+        } finally {
+            setIsMerging(false);
+        }
+    };
+
+    const handleMergeAll = async () => {
+        if (isMerging || mergeGroups.length === 0) return;
+        try {
+            setIsMerging(true);
+            for (const group of mergeGroups) {
+                const [primary, ...secondaries] = group.items;
+                await ipdService.mergeExtraCharges({
+                    primaryChargeId: primary._id,
+                    mergeChargeIds: secondaries.map((s: any) => s._id),
+                    mergedDescription: group.mergedDesc,
+                    mergedAmount: group.totalAmount,
+                });
+            }
+            toast.success(`Merged all ${mergeGroups.length} duplicate group(s) successfully`);
+            setShowMergeModal(false);
+            fetchSummary();
+        } catch (error: any) {
+            toast.error(error.message || 'Failed to merge charges');
+        } finally {
+            setIsMerging(false);
+        }
+    };
+
 
     // Auto-fill moved to button click to prevent 5s interval overrides
 
@@ -177,6 +294,8 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                 data.admissionDate = data.admissionDate || admissionDetails.admissionDate || "";
             }
             setSummary(data);
+            if (data?.extraCharges?.items?.length) detectMergeGroups(data.extraCharges.items);
+
         } catch (error: any) {
             toast.error("Failed to load bill summary");
             console.error(error);
@@ -223,7 +342,9 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                     }
                     if (data) {
                         setSummary(data);
+                        if (data?.extraCharges?.items?.length) detectMergeGroups(data.extraCharges.items);
                     }
+
                 } catch (e) { }
             }, 5000);
             return () => clearInterval(interval);
@@ -258,10 +379,16 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
     const handleUpdateCharge = async (chargeId: string) => {
         try {
             setSubmitting(true);
+            const qty = Number(editChargeData.quantity) || 1;
+            const qtyStr = qty > 1 ? ` (Qty/Days: ${qty})` : '';
+            const totalAmount = Number(editChargeData.amount || 0) * qty;
+            const cleanDesc = (editChargeData.description || '').replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+            const finalDesc = `${cleanDesc}${qtyStr}`;
+
             await ipdService.updateExtraCharge(chargeId, {
                 category: editChargeData.category,
-                description: editChargeData.description,
-                amount: editChargeData.amount
+                description: finalDesc,
+                amount: totalAmount
             });
             toast.success("Charge updated successfully");
             setEditingChargeId(null);
@@ -858,16 +985,33 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                             {/* Charges Tab */}
                             {activeTab === 'charges' && (
                                 <div className="space-y-6">
-                                    <div className="flex justify-between items-center">
+                                    <div className="flex justify-between items-center gap-3">
                                         <h3 className="text-xs font-black uppercase tracking-tight text-slate-700">Detailed Charges</h3>
-                                        {!summary?.isBillLocked && !showChargeForm && summary?.status !== 'Discharge Initiated' && (
-                                            <button
-                                                onClick={() => setShowChargeForm(true)}
-                                                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[8px] font-black uppercase tracking-widest flex items-center gap-2 transition-all shadow-md"
-                                            >
-                                                <Plus size={14} /> New Charge
-                                            </button>
-                                        )}
+                                        <div className="flex items-center gap-2">
+                                            {!summary?.isBillLocked && mergeGroups.length > 0 && summary?.status !== 'Discharge Initiated' && (
+                                                <button
+                                                    onClick={() => {
+                                                        detectMergeGroups(summary?.extraCharges?.items || []);
+                                                        setShowMergeModal(true);
+                                                    }}
+                                                    className="relative px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-[8px] font-black uppercase tracking-widest flex items-center gap-2 transition-all shadow-md"
+                                                >
+                                                    <ArrowRightLeft size={14} />
+                                                    Merge Similar
+                                                    <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-rose-500 text-white text-[7px] font-black flex items-center justify-center shadow-sm animate-pulse">
+                                                        {mergeGroups.length}
+                                                    </span>
+                                                </button>
+                                            )}
+                                            {!summary?.isBillLocked && !showChargeForm && summary?.status !== 'Discharge Initiated' && (
+                                                <button
+                                                    onClick={() => setShowChargeForm(true)}
+                                                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[8px] font-black uppercase tracking-widest flex items-center gap-2 transition-all shadow-md"
+                                                >
+                                                    <Plus size={14} /> New Charge
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
 
                                     {showChargeForm && (
@@ -1041,85 +1185,153 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                             </div>
                                         ) : (
                                             summary?.extraCharges?.items.map((item: any, i: number) => (
-                                                <div key={i} className="p-4 bg-white border border-slate-100 rounded-xl flex justify-between items-center group transition-all hover:shadow-sm">
-                                                    <div className="flex items-center gap-4">
-                                                        <div className={`w-10 h-10 rounded-[14px] flex items-center justify-center shadow-sm ${item.status === 'Reversed' ? 'bg-slate-100 text-slate-400' : 'bg-teal-50 text-teal-600'}`}>
-                                                            <Tag size={20} />
-                                                        </div>
-                                                        <div className="flex-1">
-                                                            {editingChargeId === item._id ? (
-                                                                <div className="flex flex-col gap-2">
-                                                                    <div className="flex gap-2">
-                                                                        <select 
-                                                                            value={editChargeData.category}
-                                                                            onChange={e => setEditChargeData(p => ({ ...p, category: e.target.value }))}
-                                                                            className="text-xs font-bold bg-slate-50 border border-slate-200 rounded-md px-2 py-1 outline-none"
-                                                                        >
-                                                                            {['Nursing', 'Doctor Fee', 'OT', 'Consumables', 'Other'].map(c => <option key={c} value={c}>{c}</option>)}
-                                                                        </select>
-                                                                        <input 
-                                                                            type="text"
-                                                                            value={editChargeData.description}
-                                                                            onChange={e => setEditChargeData(p => ({ ...p, description: e.target.value }))}
-                                                                            className="text-xs font-bold bg-slate-50 border border-slate-200 rounded-md px-2 py-1 outline-none flex-1"
-                                                                        />
-                                                                        <input 
-                                                                            type="number"
-                                                                            value={editChargeData.amount}
-                                                                            onChange={e => setEditChargeData(p => ({ ...p, amount: Number(e.target.value) }))}
-                                                                            className="text-xs font-bold bg-slate-50 border border-slate-200 rounded-md px-2 py-1 outline-none w-24 text-right"
-                                                                        />
-                                                                    </div>
-                                                                    <div className="flex justify-end">
-                                                                        <button onClick={() => setEditingChargeId(null)} className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2 py-1">Cancel</button>
-                                                                    </div>
-                                                                </div>
-                                                            ) : (
-                                                                <>
-                                                                    <div className="flex items-center gap-2">
-                                                                        <p className="text-xs font-black text-slate-900 uppercase">{item.description}</p>
-                                                                        <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md text-[7px] font-black uppercase tracking-wider">{item.category}</span>
-                                                                    </div>
-                                                                    <p className="text-[9px] font-bold text-slate-400 mt-1 uppercase tracking-widest">{format(new Date(item.date), 'dd MMM yyyy, hh:mm a')}</p>
-                                                                </>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex flex-col items-end">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            {editingChargeId === item._id ? (
-                                                                <button 
-                                                                    disabled={submitting}
-                                                                    onClick={() => handleUpdateCharge(item._id)} 
-                                                                    className="text-[9px] font-bold text-teal-600 uppercase tracking-widest px-2 py-1 bg-teal-50 rounded-md hover:bg-teal-100"
-                                                                >
-                                                                    {submitting ? 'Saving...' : 'Save'}
-                                                                </button>
-                                                            ) : !summary?.isBillLocked && item.status !== 'Reversed' && (
-                                                                <>
+                                                editingChargeId === item._id ? (
+                                                    <div key={item._id || i} className="p-4 bg-slate-50 rounded-2xl border-2 border-teal-500/30 animate-in slide-in-from-top-2 duration-200 shadow-sm">
+                                                        <form onSubmit={(e) => { e.preventDefault(); handleUpdateCharge(item._id); }} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                                                            <div className="space-y-1.5 md:col-span-2">
+                                                                <div className="flex justify-between items-center ml-1">
+                                                                    <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Category</label>
                                                                     <button 
-                                                                        onClick={() => {
-                                                                            setEditingChargeId(item._id);
-                                                                            setEditChargeData({ category: item.category, description: item.description, amount: item.amount });
-                                                                        }}
-                                                                        className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2 py-1 bg-slate-50 border border-slate-200 rounded-md hover:bg-slate-100"
+                                                                        type="button" 
+                                                                        onClick={() => setShowCategoryManager(true)}
+                                                                        className="text-[7px] font-bold text-teal-600 hover:text-teal-700 uppercase"
                                                                     >
-                                                                        Edit
+                                                                        Manage
+                                                                    </button>
+                                                                </div>
+                                                                <select
+                                                                    value={editChargeData.category}
+                                                                    onChange={(e) => setEditChargeData(prev => ({ ...prev, category: e.target.value }))}
+                                                                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                >
+                                                                    <option>Nursing</option>
+                                                                    <option>Consultation Charges</option>
+                                                                    <option>OT</option>
+                                                                    <option>Pharmacy</option>
+                                                                    <option>Consumables</option>
+                                                                    <option>Investigation Charges</option>
+                                                                    <option>Misc</option>
+                                                                    <option>Monitor Charges</option>
+                                                                    <option>Dmo (duty Doctor)</option>
+                                                                    <option>Ward Charges</option>
+                                                                    {customCategories.map(cat => (
+                                                                        <option key={cat._id} value={cat.name}>{cat.name}</option>
+                                                                    ))}
+                                                                </select>
+                                                            </div>
+                                                            <div className="space-y-1.5 md:col-span-3">
+                                                                <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Description</label>
+                                                                <input
+                                                                    required
+                                                                    value={editChargeData.description}
+                                                                    onChange={(e) => setEditChargeData(prev => ({ ...prev, description: e.target.value }))}
+                                                                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                    placeholder="E.G. Consult, etc."
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-1.5 md:col-span-2">
+                                                                <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Amount (₹)</label>
+                                                                <input
+                                                                    required
+                                                                    type="number"
+                                                                    min="0"
+                                                                    value={editChargeData.amount === 0 ? '' : editChargeData.amount}
+                                                                    onChange={(e) => setEditChargeData(prev => ({ ...prev, amount: Number(e.target.value) }))}
+                                                                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-1.5 md:col-span-2">
+                                                                <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Qty / Days</label>
+                                                                <input
+                                                                    required
+                                                                    type="number"
+                                                                    min="1"
+                                                                    value={editChargeData.quantity === 0 ? '' : editChargeData.quantity}
+                                                                    onChange={(e) => setEditChargeData(prev => ({ ...prev, quantity: Number(e.target.value) }))}
+                                                                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-1.5 md:col-span-3 pb-[1px]">
+                                                                <div className="flex gap-1.5 w-full">
+                                                                    <button
+                                                                        type="submit"
+                                                                        disabled={submitting}
+                                                                        className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[7px] font-black uppercase transition-all disabled:opacity-50"
+                                                                    >
+                                                                        {submitting ? 'Saving...' : 'Save'}
                                                                     </button>
                                                                     <button
-                                                                        onClick={() => handleDeleteCharge(item._id)}
-                                                                        disabled={deletingChargeId === item._id}
-                                                                        className="text-[9px] font-bold text-rose-500 uppercase tracking-widest px-2 py-1 bg-rose-50 border border-rose-100 rounded-md hover:bg-rose-100 transition-colors disabled:opacity-50"
+                                                                        type="button"
+                                                                        onClick={() => setEditingChargeId(null)}
+                                                                        className="p-2.5 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-lg transition-all"
                                                                     >
-                                                                        {deletingChargeId === item._id ? 'Deleting...' : 'Delete'}
+                                                                        <X size={12} />
                                                                     </button>
-                                                                </>
-                                                            )}
-                                                        </div>
-                                                        <p className={`text-sm font-black ${item.status === 'Reversed' ? 'text-slate-300 line-through' : 'text-slate-900'}`}>₹ {item.amount.toLocaleString()}</p>
-                                                        {item.status === 'Reversed' && <p className="text-[6px] font-black text-rose-500 uppercase tracking-widest mt-1">Reversed</p>}
+                                                                </div>
+                                                            </div>
+                                                        </form>
                                                     </div>
-                                                </div>
+                                                ) : (
+                                                    <div key={item._id || i} className="p-4 bg-white border border-slate-100 rounded-xl flex justify-between items-center group transition-all hover:shadow-sm">
+                                                        <div className="flex items-center gap-4">
+                                                            <div className={`w-10 h-10 rounded-[14px] flex items-center justify-center shadow-sm ${item.status === 'Reversed' ? 'bg-slate-100 text-slate-400' : 'bg-teal-50 text-teal-600'}`}>
+                                                                <Tag size={20} />
+                                                            </div>
+                                                            <div className="flex-1">
+                                                                <div className="flex items-center gap-2">
+                                                                    <p className="text-xs font-black text-slate-900 uppercase">{item.description}</p>
+                                                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md text-[7px] font-black uppercase tracking-wider">{item.category}</span>
+                                                                </div>
+                                                                <p className="text-[9px] font-bold text-slate-400 mt-1 uppercase tracking-widest">{format(new Date(item.date), 'dd MMM yyyy, hh:mm a')}</p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex flex-col items-end">
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                {!summary?.isBillLocked && item.status !== 'Reversed' && (
+                                                                    <>
+                                                                        <button 
+                                                                            onClick={() => {
+                                                                                let cleanDesc = item.description || '';
+                                                                                let parsedQty = item.quantity || 1;
+                                                                                let parsedAmount = Number(item.amount || 0);
+
+                                                                                const qtyMatch = cleanDesc.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+                                                                                if (qtyMatch) {
+                                                                                    const q = parseFloat(qtyMatch[1]);
+                                                                                    if (!isNaN(q) && q > 0) {
+                                                                                        parsedQty = q;
+                                                                                        cleanDesc = cleanDesc.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+                                                                                        parsedAmount = parsedAmount / q;
+                                                                                    }
+                                                                                }
+
+                                                                                setEditingChargeId(item._id);
+                                                                                setEditChargeData({
+                                                                                    category: item.category || 'Nursing',
+                                                                                    description: cleanDesc,
+                                                                                    amount: Math.round(parsedAmount * 100) / 100,
+                                                                                    quantity: parsedQty
+                                                                                });
+                                                                            }}
+                                                                            className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2 py-1 bg-slate-50 border border-slate-200 rounded-md hover:bg-slate-100"
+                                                                        >
+                                                                            Edit
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={() => handleDeleteCharge(item._id)}
+                                                                            disabled={deletingChargeId === item._id}
+                                                                            className="text-[9px] font-bold text-rose-500 uppercase tracking-widest px-2 py-1 bg-rose-50 border border-rose-100 rounded-md hover:bg-rose-100 transition-colors disabled:opacity-50"
+                                                                        >
+                                                                            {deletingChargeId === item._id ? 'Deleting...' : 'Delete'}
+                                                                        </button>
+                                                                    </>
+                                                                )}
+                                                            </div>
+                                                            <p className={`text-sm font-black ${item.status === 'Reversed' ? 'text-slate-300 line-through' : 'text-slate-900'}`}>₹ {item.amount.toLocaleString()}</p>
+                                                            {item.status === 'Reversed' && <p className="text-[6px] font-black text-rose-500 uppercase tracking-widest mt-1">Reversed</p>}
+                                                        </div>
+                                                    </div>
+                                                )
                                             ))
                                         )}
                                     </div>
@@ -1297,6 +1509,103 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                     </div>
                 )}
             </div>
+
+            {/* ── Merge Similar Charges Modal ─────────────────────────────────── */}
+            {showMergeModal && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                    <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+                        {/* Header */}
+                        <div className="px-5 py-4 bg-amber-500 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="w-9 h-9 bg-white/20 rounded-xl flex items-center justify-center">
+                                    <ArrowRightLeft size={18} className="text-white" />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-black text-white uppercase tracking-wider">Merge Similar Charges</h3>
+                                    <p className="text-[9px] text-amber-100 font-medium">{mergeGroups.length} duplicate group{mergeGroups.length !== 1 ? 's' : ''} detected — consolidate into single rows</p>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setShowMergeModal(false)}
+                                disabled={isMerging}
+                                className="w-8 h-8 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white transition-colors disabled:opacity-50"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        {/* Groups */}
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50">
+                            {mergeGroups.map((group, gi) => (
+                                <div key={gi} className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+                                    {/* Group header */}
+                                    <div className="px-4 py-3 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
+                                        <div>
+                                            <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest">Group {gi + 1}</p>
+                                            <p className="text-xs font-black text-slate-900 mt-0.5">{group.baseName}</p>
+                                        </div>
+                                        <span className="px-2 py-0.5 bg-amber-500 text-white text-[7px] font-black rounded-full uppercase tracking-widest">
+                                            {group.items.length} charges
+                                        </span>
+                                    </div>
+
+                                    {/* Individual charges */}
+                                    <div className="divide-y divide-slate-50">
+                                        {group.items.map((item: any, ii: number) => (
+                                            <div key={ii} className="px-4 py-2.5 flex items-center justify-between">
+                                                <div>
+                                                    <p className="text-[9px] font-bold text-slate-700">{item.description}</p>
+                                                    <span className="text-[7px] font-black text-slate-400 uppercase">{item.category}</span>
+                                                </div>
+                                                <p className="text-[11px] font-black text-slate-900">₹ {Number(item.amount || 0).toLocaleString()}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {/* Merged preview */}
+                                    <div className="px-4 py-3 bg-teal-50 border-t-2 border-teal-200 flex items-center justify-between">
+                                        <div>
+                                            <p className="text-[7px] font-black text-teal-600 uppercase tracking-widest mb-0.5">Merged Into →</p>
+                                            <p className="text-[10px] font-black text-teal-900">{group.mergedDesc}</p>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <p className="text-sm font-black text-teal-700">₹ {group.totalAmount.toLocaleString()}</p>
+                                            <button
+                                                onClick={() => handleMergeGroup(group)}
+                                                disabled={isMerging}
+                                                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[8px] font-black uppercase tracking-widest transition-all disabled:opacity-50"
+                                            >
+                                                {isMerging ? '...' : 'Merge'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Footer */}
+                        <div className="px-5 py-4 bg-white border-t border-slate-100 flex items-center justify-between gap-3">
+                            <button
+                                onClick={() => setShowMergeModal(false)}
+                                disabled={isMerging}
+                                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            {mergeGroups.length > 1 && (
+                                <button
+                                    onClick={handleMergeAll}
+                                    disabled={isMerging}
+                                    className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest transition-all shadow-md shadow-amber-100 disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    <ArrowRightLeft size={14} />
+                                    {isMerging ? 'Merging...' : `Merge All ${mergeGroups.length} Groups`}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Sub-modals */}
             {
