@@ -23,7 +23,8 @@ import {
     Stethoscope,
     IndianRupee,
     ArrowRightLeft,
-    Clock
+    Clock,
+    Check
 } from 'lucide-react';
 import { ipdService } from '@/lib/integrations/services/ipd.service';
 import { toast } from 'react-hot-toast';
@@ -80,6 +81,7 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
     const [showMergeModal, setShowMergeModal] = useState(false);
     const [mergeGroups, setMergeGroups] = useState<{ baseName: string; category: string; items: any[]; totalAmount: number; mergedDesc: string }[]>([]);
     const [isMerging, setIsMerging] = useState(false);
+    const [unmergingChargeId, setUnmergingChargeId] = useState<string | null>(null);
 
     /** Parse a duration string inside parentheses into total minutes.
      *  Recognises patterns: (Qty/Days:N), (NDAYSmHOURSnMINS), (NHOURS), (NMINS) etc. */
@@ -116,6 +118,12 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
         return parts.length > 0 ? parts.join(' ') : '0HOURS';
     };
 
+    /** Dynamically determines if an extra charge is merged */
+    const isChargeMergedOrConsolidated = (item: any): boolean => {
+        if (!item) return false;
+        return Boolean(item.isMerged || (Array.isArray(item.mergedFrom) && item.mergedFrom.length > 0));
+    };
+
     /** Detects groups of ≥2 charges sharing the same base name (case-insensitive). */
     const detectMergeGroups = (items: any[]) => {
         const grouped: Record<string, any[]> = {};
@@ -140,7 +148,7 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                 mergedDesc = `${baseName} (Qty/Days: ${totalQty})`;
             } else {
                 const totalMins = grpItems.reduce((s: number, i: any) => s + parseDurationToMins(i.description || '').totalMins, 0);
-                mergedDesc = totalMins > 0 ? `${baseName} (${formatMinsToReadable(totalMins)})` : baseName;
+                mergedDesc = totalMins > 0 ? `${baseName} (${formatMinsToReadable(totalMins)})` : `${baseName} (Qty/Days: ${grpItems.length})`;
             }
             groups.push({ baseName, category: grpItems[0].category || 'Nursing', items: grpItems, totalAmount, mergedDesc });
         });
@@ -189,6 +197,20 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
             toast.error(error.message || 'Failed to merge charges');
         } finally {
             setIsMerging(false);
+        }
+    };
+
+    const handleUnmergeCharge = async (chargeId: string) => {
+        if (unmergingChargeId) return;
+        try {
+            setUnmergingChargeId(chargeId);
+            await ipdService.unmergeExtraCharges(chargeId);
+            toast.success("Charges unmerged successfully! Original individual items restored.");
+            fetchSummary();
+        } catch (error: any) {
+            toast.error(error.response?.data?.message || error.message || "Failed to unmerge charges");
+        } finally {
+            setUnmergingChargeId(null);
         }
     };
 
@@ -988,19 +1010,22 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                     <div className="flex justify-between items-center gap-3">
                                         <h3 className="text-xs font-black uppercase tracking-tight text-slate-700">Detailed Charges</h3>
                                         <div className="flex items-center gap-2">
-                                            {!summary?.isBillLocked && mergeGroups.length > 0 && summary?.status !== 'Discharge Initiated' && (
+                                            {!summary?.isBillLocked && summary?.status !== 'Discharge Initiated' && (
                                                 <button
+                                                    type="button"
                                                     onClick={() => {
                                                         detectMergeGroups(summary?.extraCharges?.items || []);
                                                         setShowMergeModal(true);
                                                     }}
-                                                    className="relative px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-[8px] font-black uppercase tracking-widest flex items-center gap-2 transition-all shadow-md"
+                                                    className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-[8px] font-black uppercase tracking-widest flex items-center gap-1.5 transition-all shadow-md"
                                                 >
-                                                    <ArrowRightLeft size={14} />
-                                                    Merge Similar
-                                                    <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-rose-500 text-white text-[7px] font-black flex items-center justify-center shadow-sm animate-pulse">
-                                                        {mergeGroups.length}
-                                                    </span>
+                                                    <ArrowRightLeft size={13} />
+                                                    Merge / Unmerge
+                                                    {mergeGroups.length > 0 && (
+                                                        <span className="w-4 h-4 rounded-full bg-rose-500 text-white text-[7px] font-black flex items-center justify-center shadow-sm animate-pulse ml-0.5">
+                                                            {mergeGroups.length}
+                                                        </span>
+                                                    )}
                                                 </button>
                                             )}
                                             {!summary?.isBillLocked && !showChargeForm && summary?.status !== 'Discharge Initiated' && (
@@ -1015,15 +1040,15 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                     </div>
 
                                     {showChargeForm && (
-                                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 animate-in slide-in-from-top-4 duration-300">
-                                            <form onSubmit={handleAddCharge} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                                                <div className="space-y-1.5 md:col-span-2">
-                                                    <div className="flex justify-between items-center ml-1">
-                                                        <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Category</label>
+                                        <div className="p-3.5 sm:p-4 bg-slate-50 rounded-2xl border border-slate-200 animate-in slide-in-from-top-4 duration-300">
+                                            <form onSubmit={handleAddCharge} className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-12 gap-2.5 items-end">
+                                                <div className="space-y-1 col-span-2 sm:col-span-1 lg:col-span-2">
+                                                    <div className="flex items-center justify-between gap-1 px-1">
+                                                        <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider">Category</label>
                                                         <button 
                                                             type="button" 
                                                             onClick={() => setShowCategoryManager(true)}
-                                                            className="text-[7px] font-bold text-teal-600 hover:text-teal-700 uppercase"
+                                                            className="text-[8px] font-bold text-teal-600 hover:text-teal-700 uppercase"
                                                         >
                                                             Manage
                                                         </button>
@@ -1031,7 +1056,7 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                                     <select
                                                         value={chargeData.category}
                                                         onChange={(e) => setChargeData(prev => ({ ...prev, category: e.target.value }))}
-                                                        className="w-full px-3 py-2.5 bg-white border border-slate-100 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                        className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
                                                     >
                                                         <option>Nursing</option>
                                                         <option>Consultation Charges</option>
@@ -1048,51 +1073,67 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                                         ))}
                                                     </select>
                                                 </div>
-                                                <div className="space-y-1.5 md:col-span-3">
-                                                    <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Description</label>
+                                                <div className="space-y-1 col-span-2 sm:col-span-2 lg:col-span-3">
+                                                    <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider px-1 block">Description</label>
                                                     <input
                                                         required
                                                         value={chargeData.description}
                                                         onChange={(e) => setChargeData(prev => ({ ...prev, description: e.target.value }))}
-                                                        className="w-full px-3 py-2.5 bg-white border border-slate-100 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                        className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
                                                         placeholder="E.G. Consult, etc."
                                                     />
                                                 </div>
-                                                <div className="space-y-1.5 md:col-span-2">
-                                                    <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Amount (₹)</label>
+                                                <div className="space-y-1 col-span-1 sm:col-span-1 lg:col-span-2">
+                                                    <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider px-1 block whitespace-nowrap">Rate (₹)</label>
                                                     <input
                                                         required
                                                         type="number"
                                                         min="0"
                                                         value={chargeData.amount || ''}
-                                                        onChange={(e) => setChargeData(prev => ({ ...prev, amount: Number(e.target.value) }))}
-                                                        className="w-full px-3 py-2.5 bg-white border border-slate-100 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                        onWheel={(e) => e.currentTarget.blur()}
+                                                        onKeyDown={(e) => { if (['-', '+', 'e', 'E'].includes(e.key)) e.preventDefault(); }}
+                                                        onChange={(e) => setChargeData(prev => ({ ...prev, amount: Math.max(0, Number(e.target.value)) }))}
+                                                        className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                        placeholder="0"
                                                     />
                                                 </div>
-                                                <div className="space-y-1.5 md:col-span-2">
-                                                    <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Qty / Days</label>
+                                                <div className="space-y-1 col-span-1 sm:col-span-1 lg:col-span-2">
+                                                    <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider px-1 block whitespace-nowrap">Qty / Days</label>
                                                     <input
                                                         required
                                                         type="number"
                                                         min="1"
+                                                        step="any"
                                                         value={chargeData.quantity || ''}
-                                                        onChange={(e) => setChargeData(prev => ({ ...prev, quantity: Number(e.target.value) }))}
-                                                        className="w-full px-3 py-2.5 bg-white border border-slate-100 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                        onWheel={(e) => e.currentTarget.blur()}
+                                                        onKeyDown={(e) => { if (['-', '+', 'e', 'E'].includes(e.key)) e.preventDefault(); }}
+                                                        onChange={(e) => setChargeData(prev => ({ ...prev, quantity: Math.max(1, Number(e.target.value)) }))}
+                                                        className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                        placeholder="1"
                                                     />
                                                 </div>
-                                                <div className="space-y-1.5 md:col-span-3 pb-[1px]">
+                                                <div className="space-y-1 col-span-1 sm:col-span-1 lg:col-span-2">
+                                                    <label className="text-[8px] font-black text-teal-700 uppercase tracking-wider px-1 block whitespace-nowrap">Total (₹)</label>
+                                                    <div className="w-full px-2.5 py-2 bg-teal-50/80 border border-teal-200 rounded-lg text-[11px] font-black text-teal-900 truncate">
+                                                        ₹ {((Number(chargeData.amount) || 0) * (Number(chargeData.quantity) || 1)).toLocaleString()}
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-1 col-span-1 sm:col-span-1 lg:col-span-1 pb-[1px]">
                                                     <div className="flex gap-1.5 w-full">
                                                         <button
                                                             type="submit"
                                                             disabled={submitting}
-                                                            className="flex-1 py-2.5 bg-teal-600 text-white rounded-lg text-[7px] font-black uppercase transition-all disabled:opacity-50"
+                                                            className="flex-1 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[9px] font-black uppercase tracking-wider transition-all disabled:opacity-50 shadow-sm flex items-center justify-center gap-1"
+                                                            title="Add charge"
                                                         >
-                                                            {submitting ? 'Adding...' : 'Add'}
+                                                            <Check size={12} />
+                                                            <span>Add</span>
                                                         </button>
                                                         <button
                                                             type="button"
                                                             onClick={() => setShowChargeForm(false)}
-                                                            className="p-2.5 bg-slate-200 text-slate-500 rounded-lg"
+                                                            className="p-2 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-lg transition-all"
+                                                            title="Cancel"
                                                         >
                                                             <X size={12} />
                                                         </button>
@@ -1186,15 +1227,15 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                         ) : (
                                             summary?.extraCharges?.items.map((item: any, i: number) => (
                                                 editingChargeId === item._id ? (
-                                                    <div key={item._id || i} className="p-4 bg-slate-50 rounded-2xl border-2 border-teal-500/30 animate-in slide-in-from-top-2 duration-200 shadow-sm">
-                                                        <form onSubmit={(e) => { e.preventDefault(); handleUpdateCharge(item._id); }} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                                                            <div className="space-y-1.5 md:col-span-2">
-                                                                <div className="flex justify-between items-center ml-1">
-                                                                    <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Category</label>
+                                                    <div key={item._id || i} className="p-3.5 sm:p-4 bg-slate-50 rounded-2xl border-2 border-teal-500/30 animate-in slide-in-from-top-2 duration-200 shadow-sm">
+                                                        <form onSubmit={(e) => { e.preventDefault(); handleUpdateCharge(item._id); }} className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-12 gap-2.5 items-end">
+                                                            <div className="space-y-1 col-span-2 sm:col-span-1 lg:col-span-2">
+                                                                <div className="flex items-center justify-between gap-1 px-1">
+                                                                    <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider">Category</label>
                                                                     <button 
                                                                         type="button" 
                                                                         onClick={() => setShowCategoryManager(true)}
-                                                                        className="text-[7px] font-bold text-teal-600 hover:text-teal-700 uppercase"
+                                                                        className="text-[8px] font-bold text-teal-600 hover:text-teal-700 uppercase"
                                                                     >
                                                                         Manage
                                                                     </button>
@@ -1202,7 +1243,7 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                                                 <select
                                                                     value={editChargeData.category}
                                                                     onChange={(e) => setEditChargeData(prev => ({ ...prev, category: e.target.value }))}
-                                                                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                    className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
                                                                 >
                                                                     <option>Nursing</option>
                                                                     <option>Consultation Charges</option>
@@ -1219,51 +1260,67 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                                                     ))}
                                                                 </select>
                                                             </div>
-                                                            <div className="space-y-1.5 md:col-span-3">
-                                                                <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Description</label>
+                                                            <div className="space-y-1 col-span-2 sm:col-span-2 lg:col-span-3">
+                                                                <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider px-1 block">Description</label>
                                                                 <input
                                                                     required
                                                                     value={editChargeData.description}
                                                                     onChange={(e) => setEditChargeData(prev => ({ ...prev, description: e.target.value }))}
-                                                                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                    className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
                                                                     placeholder="E.G. Consult, etc."
                                                                 />
                                                             </div>
-                                                            <div className="space-y-1.5 md:col-span-2">
-                                                                <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Amount (₹)</label>
+                                                            <div className="space-y-1 col-span-1 sm:col-span-1 lg:col-span-2">
+                                                                <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider px-1 block whitespace-nowrap">Rate (₹)</label>
                                                                 <input
                                                                     required
                                                                     type="number"
                                                                     min="0"
                                                                     value={editChargeData.amount === 0 ? '' : editChargeData.amount}
-                                                                    onChange={(e) => setEditChargeData(prev => ({ ...prev, amount: Number(e.target.value) }))}
-                                                                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                    onWheel={(e) => e.currentTarget.blur()}
+                                                                    onKeyDown={(e) => { if (['-', '+', 'e', 'E'].includes(e.key)) e.preventDefault(); }}
+                                                                    onChange={(e) => setEditChargeData(prev => ({ ...prev, amount: Math.max(0, Number(e.target.value)) }))}
+                                                                    className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                    placeholder="0"
                                                                 />
                                                             </div>
-                                                            <div className="space-y-1.5 md:col-span-2">
-                                                                <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Qty / Days</label>
+                                                            <div className="space-y-1 col-span-1 sm:col-span-1 lg:col-span-2">
+                                                                <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider px-1 block whitespace-nowrap">Qty / Days</label>
                                                                 <input
                                                                     required
                                                                     type="number"
                                                                     min="1"
+                                                                    step="any"
                                                                     value={editChargeData.quantity === 0 ? '' : editChargeData.quantity}
-                                                                    onChange={(e) => setEditChargeData(prev => ({ ...prev, quantity: Number(e.target.value) }))}
-                                                                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-[9px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                    onWheel={(e) => e.currentTarget.blur()}
+                                                                    onKeyDown={(e) => { if (['-', '+', 'e', 'E'].includes(e.key)) e.preventDefault(); }}
+                                                                    onChange={(e) => setEditChargeData(prev => ({ ...prev, quantity: Math.max(1, Number(e.target.value)) }))}
+                                                                    className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-teal-500/20"
+                                                                    placeholder="1"
                                                                 />
                                                             </div>
-                                                            <div className="space-y-1.5 md:col-span-3 pb-[1px]">
+                                                            <div className="space-y-1 col-span-1 sm:col-span-1 lg:col-span-2">
+                                                                <label className="text-[8px] font-black text-teal-700 uppercase tracking-wider px-1 block whitespace-nowrap">Total (₹)</label>
+                                                                <div className="w-full px-2.5 py-2 bg-teal-50/80 border border-teal-200 rounded-lg text-[11px] font-black text-teal-900 truncate">
+                                                                    ₹ {((Number(editChargeData.amount) || 0) * (Number(editChargeData.quantity) || 1)).toLocaleString()}
+                                                                </div>
+                                                            </div>
+                                                            <div className="space-y-1 col-span-1 sm:col-span-1 lg:col-span-1 pb-[1px]">
                                                                 <div className="flex gap-1.5 w-full">
                                                                     <button
                                                                         type="submit"
                                                                         disabled={submitting}
-                                                                        className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[7px] font-black uppercase transition-all disabled:opacity-50"
+                                                                        className="flex-1 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[9px] font-black uppercase tracking-wider transition-all disabled:opacity-50 shadow-sm flex items-center justify-center gap-1"
+                                                                        title="Save charge"
                                                                     >
-                                                                        {submitting ? 'Saving...' : 'Save'}
+                                                                        <Check size={12} />
+                                                                        <span>Save</span>
                                                                     </button>
                                                                     <button
                                                                         type="button"
                                                                         onClick={() => setEditingChargeId(null)}
-                                                                        className="p-2.5 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-lg transition-all"
+                                                                        className="p-2 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-lg transition-all"
+                                                                        title="Cancel"
                                                                     >
                                                                         <X size={12} />
                                                                     </button>
@@ -1272,23 +1329,40 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                                         </form>
                                                     </div>
                                                 ) : (
-                                                    <div key={item._id || i} className="p-4 bg-white border border-slate-100 rounded-xl flex justify-between items-center group transition-all hover:shadow-sm">
-                                                        <div className="flex items-center gap-4">
-                                                            <div className={`w-10 h-10 rounded-[14px] flex items-center justify-center shadow-sm ${item.status === 'Reversed' ? 'bg-slate-100 text-slate-400' : 'bg-teal-50 text-teal-600'}`}>
-                                                                <Tag size={20} />
+                                                    <div key={item._id || i} className="p-3.5 sm:p-4 bg-white border border-slate-100 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 group transition-all hover:shadow-sm">
+                                                        <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
+                                                            <div className={`w-10 h-10 rounded-[14px] flex items-center justify-center shadow-sm shrink-0 ${item.status === 'Reversed' ? 'bg-slate-100 text-slate-400' : 'bg-teal-50 text-teal-600'}`}>
+                                                                <Tag size={18} />
                                                             </div>
-                                                            <div className="flex-1">
-                                                                <div className="flex items-center gap-2">
-                                                                    <p className="text-xs font-black text-slate-900 uppercase">{item.description}</p>
-                                                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md text-[7px] font-black uppercase tracking-wider">{item.category}</span>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    <p className="text-xs font-black text-slate-900 uppercase break-words">{item.description}</p>
+                                                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md text-[7px] font-black uppercase tracking-wider shrink-0">{item.category}</span>
+                                                                    {isChargeMergedOrConsolidated(item) && (
+                                                                        <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-md text-[7px] font-black uppercase tracking-wider flex items-center gap-1 shrink-0">
+                                                                            <ArrowRightLeft size={8} /> Merged {item.mergedFrom?.length ? `(${item.mergedFrom.length})` : ''}
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                                 <p className="text-[9px] font-bold text-slate-400 mt-1 uppercase tracking-widest">{format(new Date(item.date), 'dd MMM yyyy, hh:mm a')}</p>
                                                             </div>
                                                         </div>
-                                                        <div className="flex flex-col items-end">
-                                                            <div className="flex items-center gap-2 mb-1">
+                                                        <div className="flex flex-col sm:items-end gap-1.5 shrink-0 self-end sm:self-auto">
+                                                            <div className="flex items-center gap-2">
                                                                 {!summary?.isBillLocked && item.status !== 'Reversed' && (
                                                                     <>
+                                                                        {isChargeMergedOrConsolidated(item) && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleUnmergeCharge(item._id)}
+                                                                                disabled={unmergingChargeId === item._id}
+                                                                                className="text-[9px] font-bold text-amber-700 uppercase tracking-widest px-2 py-1 bg-amber-50 border border-amber-200 rounded-md hover:bg-amber-100 transition-colors disabled:opacity-50 flex items-center gap-1"
+                                                                                title="Unmerge back into original separate charges"
+                                                                            >
+                                                                                <ArrowRightLeft size={10} />
+                                                                                {unmergingChargeId === item._id ? 'Unmerging...' : 'Unmerge'}
+                                                                            </button>
+                                                                        )}
                                                                         <button 
                                                                             onClick={() => {
                                                                                 let cleanDesc = item.description || '';
@@ -1327,8 +1401,37 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                                                     </>
                                                                 )}
                                                             </div>
-                                                            <p className={`text-sm font-black ${item.status === 'Reversed' ? 'text-slate-300 line-through' : 'text-slate-900'}`}>₹ {item.amount.toLocaleString()}</p>
-                                                            {item.status === 'Reversed' && <p className="text-[6px] font-black text-rose-500 uppercase tracking-widest mt-1">Reversed</p>}
+                                                            {(() => {
+                                                                let cleanDesc = item.description || '';
+                                                                let parsedQty = item.quantity || 1;
+                                                                const qtyMatch = cleanDesc.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+                                                                if (qtyMatch) {
+                                                                    const q = parseFloat(qtyMatch[1]);
+                                                                    if (!isNaN(q) && q > 0) parsedQty = q;
+                                                                }
+                                                                const totalAmt = Number(item.amount || 0);
+                                                                const unitRate = parsedQty > 0 ? (totalAmt / parsedQty) : totalAmt;
+
+                                                                return (
+                                                                    <div className="flex items-center gap-3 bg-slate-50/90 px-3 py-1.5 rounded-xl border border-slate-100 shadow-2xs">
+                                                                        <div className="text-right">
+                                                                            <span className="text-[7px] font-black text-slate-400 uppercase tracking-widest block leading-none mb-0.5">Rate</span>
+                                                                            <span className="text-[11px] font-bold text-slate-600 leading-none">₹ {Math.round(unitRate).toLocaleString()}</span>
+                                                                        </div>
+                                                                        <div className="text-center px-2 py-0.5 bg-white border border-slate-200 rounded-md">
+                                                                            <span className="text-[7px] font-black text-slate-400 uppercase tracking-widest block leading-none mb-0.5">Qty/Days</span>
+                                                                            <span className="text-[11px] font-black text-slate-800 leading-none">{parsedQty}</span>
+                                                                        </div>
+                                                                        <div className="text-right min-w-[75px]">
+                                                                            <span className="text-[7px] font-black text-teal-600 uppercase tracking-widest block leading-none mb-0.5">Total Amount</span>
+                                                                            <span className={`text-xs font-black ${item.status === 'Reversed' ? 'text-slate-300 line-through' : 'text-slate-900'} leading-none`}>
+                                                                                ₹ {totalAmt.toLocaleString()}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })()}
+                                                            {item.status === 'Reversed' && <p className="text-[6px] font-black text-rose-500 uppercase tracking-widest mt-0.5">Reversed</p>}
                                                         </div>
                                                     </div>
                                                 )
@@ -1521,66 +1624,120 @@ export const IPDBillingModal: React.FC<IPDBillingModalProps> = ({ isOpen, onClos
                                     <ArrowRightLeft size={18} className="text-white" />
                                 </div>
                                 <div>
-                                    <h3 className="text-sm font-black text-white uppercase tracking-wider">Merge Similar Charges</h3>
-                                    <p className="text-[9px] text-amber-100 font-medium">{mergeGroups.length} duplicate group{mergeGroups.length !== 1 ? 's' : ''} detected — consolidate into single rows</p>
+                                    <h3 className="text-sm font-black text-white uppercase tracking-wider">Merge / Unmerge Charges</h3>
+                                    <p className="text-[9px] text-amber-100 font-medium">Consolidate multiple duplicate charges or revert previously merged charges</p>
                                 </div>
                             </div>
                             <button
                                 onClick={() => setShowMergeModal(false)}
-                                disabled={isMerging}
+                                disabled={isMerging || !!unmergingChargeId}
                                 className="w-8 h-8 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white transition-colors disabled:opacity-50"
                             >
                                 <X size={16} />
                             </button>
                         </div>
 
-                        {/* Groups */}
+                        {/* Content */}
                         <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50">
-                            {mergeGroups.map((group, gi) => (
-                                <div key={gi} className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-                                    {/* Group header */}
-                                    <div className="px-4 py-3 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest">Group {gi + 1}</p>
-                                            <p className="text-xs font-black text-slate-900 mt-0.5">{group.baseName}</p>
-                                        </div>
-                                        <span className="px-2 py-0.5 bg-amber-500 text-white text-[7px] font-black rounded-full uppercase tracking-widest">
-                                            {group.items.length} charges
-                                        </span>
-                                    </div>
-
-                                    {/* Individual charges */}
-                                    <div className="divide-y divide-slate-50">
-                                        {group.items.map((item: any, ii: number) => (
-                                            <div key={ii} className="px-4 py-2.5 flex items-center justify-between">
+                            {/* Groups ready to merge */}
+                            {mergeGroups.length > 0 && (
+                                <div className="space-y-3">
+                                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">
+                                        Detected Duplicate Groups ({mergeGroups.length})
+                                    </p>
+                                    {mergeGroups.map((group, gi) => (
+                                        <div key={gi} className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+                                            {/* Group header */}
+                                            <div className="px-4 py-3 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
                                                 <div>
-                                                    <p className="text-[9px] font-bold text-slate-700">{item.description}</p>
-                                                    <span className="text-[7px] font-black text-slate-400 uppercase">{item.category}</span>
+                                                    <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest">Group {gi + 1}</p>
+                                                    <p className="text-xs font-black text-slate-900 mt-0.5">{group.baseName}</p>
                                                 </div>
-                                                <p className="text-[11px] font-black text-slate-900">₹ {Number(item.amount || 0).toLocaleString()}</p>
+                                                <span className="px-2 py-0.5 bg-amber-500 text-white text-[7px] font-black rounded-full uppercase tracking-widest">
+                                                    {group.items.length} charges
+                                                </span>
                                             </div>
-                                        ))}
-                                    </div>
 
-                                    {/* Merged preview */}
-                                    <div className="px-4 py-3 bg-teal-50 border-t-2 border-teal-200 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-[7px] font-black text-teal-600 uppercase tracking-widest mb-0.5">Merged Into →</p>
-                                            <p className="text-[10px] font-black text-teal-900">{group.mergedDesc}</p>
+                                            {/* Individual charges */}
+                                            <div className="divide-y divide-slate-50">
+                                                {group.items.map((item: any, ii: number) => (
+                                                    <div key={ii} className="px-4 py-2.5 flex items-center justify-between">
+                                                        <div>
+                                                            <p className="text-[9px] font-bold text-slate-700">{item.description}</p>
+                                                            <span className="text-[7px] font-black text-slate-400 uppercase">{item.category}</span>
+                                                        </div>
+                                                        <p className="text-[11px] font-black text-slate-900">₹ {Number(item.amount || 0).toLocaleString()}</p>
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            {/* Merged preview */}
+                                            <div className="px-4 py-3 bg-teal-50 border-t-2 border-teal-200 flex items-center justify-between">
+                                                <div>
+                                                    <p className="text-[7px] font-black text-teal-600 uppercase tracking-widest mb-0.5">Merged Into →</p>
+                                                    <p className="text-[10px] font-black text-teal-900">{group.mergedDesc}</p>
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <p className="text-sm font-black text-teal-700">₹ {group.totalAmount.toLocaleString()}</p>
+                                                    <button
+                                                        onClick={() => handleMergeGroup(group)}
+                                                        disabled={isMerging}
+                                                        className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[8px] font-black uppercase tracking-widest transition-all disabled:opacity-50"
+                                                    >
+                                                        {isMerging ? '...' : 'Merge'}
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div className="flex items-center gap-3">
-                                            <p className="text-sm font-black text-teal-700">₹ {group.totalAmount.toLocaleString()}</p>
-                                            <button
-                                                onClick={() => handleMergeGroup(group)}
-                                                disabled={isMerging}
-                                                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[8px] font-black uppercase tracking-widest transition-all disabled:opacity-50"
-                                            >
-                                                {isMerging ? '...' : 'Merge'}
-                                            </button>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Previously Merged Charges (Unmerge Section) */}
+                            {(() => {
+                                const mergedList = (summary?.extraCharges?.items || []).filter((i: any) => isChargeMergedOrConsolidated(i) && i.status !== 'Reversed');
+                                if (mergedList.length === 0) return null;
+                                return (
+                                    <div className="space-y-3 pt-2">
+                                        <div className="flex items-center justify-between ml-1">
+                                            <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest">
+                                                Previously Merged Charges ({mergedList.length})
+                                            </p>
+                                            <span className="text-[7px] text-slate-400 font-bold uppercase">Click unmerge to restore original items</span>
+                                        </div>
+                                        <div className="space-y-2">
+                                            {mergedList.map((mc: any, mi: number) => (
+                                                <div key={mi} className="bg-white rounded-xl border border-amber-200/70 p-3 shadow-2xs flex items-center justify-between gap-3">
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-[7px] font-black uppercase shrink-0">Merged</span>
+                                                            <p className="text-xs font-black text-slate-900 truncate">{mc.description}</p>
+                                                        </div>
+                                                        <p className="text-[8px] text-slate-400 mt-1 font-bold">
+                                                            Consolidated from {mc.mergedFrom?.length || 'multiple'} original charges • ₹ {Number(mc.amount || 0).toLocaleString()}
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleUnmergeCharge(mc._id)}
+                                                        disabled={unmergingChargeId === mc._id}
+                                                        className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-1 shrink-0"
+                                                    >
+                                                        <ArrowRightLeft size={10} />
+                                                        {unmergingChargeId === mc._id ? 'Unmerging...' : 'Unmerge'}
+                                                    </button>
+                                                </div>
+                                            ))}
                                         </div>
                                     </div>
+                                );
+                            })()}
+
+                            {mergeGroups.length === 0 && !(summary?.extraCharges?.items || []).some((i: any) => isChargeMergedOrConsolidated(i) && i.status !== 'Reversed') && (
+                                <div className="p-8 text-center bg-white rounded-xl border border-dashed border-slate-200">
+                                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">No duplicate charges detected</p>
                                 </div>
-                            ))}
+                            )}
                         </div>
 
                         {/* Footer */}

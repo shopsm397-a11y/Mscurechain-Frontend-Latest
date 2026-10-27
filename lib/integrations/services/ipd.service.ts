@@ -526,6 +526,12 @@ export const ipdService = {
       body: JSON.stringify(data),
     }),
 
+  unmergeExtraCharges: (chargeId: string) =>
+    apiClient<any>(IPD_ENDPOINTS.BILLING.CHARGE_UNMERGE, {
+      method: "POST",
+      body: JSON.stringify({ chargeId }),
+    }),
+
   addAdvancePayment: (data: {
     admissionId: string;
     amount: number;

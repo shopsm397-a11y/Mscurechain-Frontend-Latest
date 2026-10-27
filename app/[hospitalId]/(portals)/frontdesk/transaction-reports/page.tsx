@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Trash2, FileText, Stethoscope, Bed, Pill, Wrench, FlaskConical, CreditCard, Printer, Calendar, Search, Activity, RefreshCw, UserCheck, Save, UserCog } from 'lucide-react';
+import { Plus, Trash2, FileText, Stethoscope, Bed, Pill, Wrench, FlaskConical, CreditCard, Printer, Calendar, Search, Activity, RefreshCw, UserCheck, Save, UserCog, ArrowRightLeft } from 'lucide-react';
 import { hospitalAdminService } from '@/lib/integrations/services/hospitalAdmin.service';
 import { helpdeskService } from '@/lib/integrations/services/helpdesk.service';
 import { ipdService } from '@/lib/integrations/services/ipd.service';
@@ -21,13 +21,46 @@ import { apiClient } from '@/lib/integrations/api/apiClient';
 interface DoctorCharge { id: string; code?: string; date?: string; doctorName: string; specialization: string; rate: number; visits: number; amount?: number; }
 interface AdmissionCharge { id: string; code?: string; date?: string; chargeType: string; description: string; rate: number; days: number | string; amount?: number; }
 interface MedCharge { id: string; code?: string; date?: string; medicineName: string; rate: number; quantity: number; amount?: number; }
-interface ServiceCharge { id: string; code?: string; date?: string; serviceName: string; rate: number; quantity: number; amount?: number; }
+interface ServiceCharge { id: string; code?: string; date?: string; serviceName: string; rate: number; quantity: number | string; amount?: number; isMerged?: boolean; rawChargeId?: string; }
 interface DiagCharge { id: string; code?: string; date?: string; testName: string; rate: number; quantity: number; amount?: number; category?: 'investigation' | 'radiology'; }
 interface Payment { id: string; receiptNo: string; date: string; mode: string; status: string; amount: number; paymentDetails?: { cash?: number; upi?: number; card?: number; bankTransfer?: number; }; }
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const genReceipt = () => 'RCP-' + Date.now().toString().slice(-7);
 const fmt = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+export const parseDurationToMins = (desc: string): { baseName: string; totalMins: number; isQty: boolean; qtyVal: number } => {
+    const qtyMatch = desc.match(/\((?:Qty\/Days|Qty|Days):\s*([0-9.]+)\)/i);
+    if (qtyMatch) {
+        const qty = parseFloat(qtyMatch[1]);
+        const base = desc.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
+        return { baseName: base, totalMins: qty * 24 * 60, isQty: true, qtyVal: qty };
+    }
+    const durMatch = desc.match(/\(([^)]+)\)\s*$/);
+    if (durMatch) {
+        const inner = durMatch[1];
+        const days = inner.match(/(\d+)\s*DAYS?/i)?.[1] || '0';
+        const hours = inner.match(/(\d+)\s*HOURS?/i)?.[1] || '0';
+        const mins = inner.match(/(\d+)\s*MIN/i)?.[1] || '0';
+        const totalMins = parseInt(days) * 24 * 60 + parseInt(hours) * 60 + parseInt(mins);
+        if (totalMins > 0) {
+            const base = desc.replace(/\s*\([^)]+\)\s*$/, '').trim();
+            return { baseName: base, totalMins, isQty: false, qtyVal: 0 };
+        }
+    }
+    return { baseName: desc.trim(), totalMins: 0, isQty: false, qtyVal: 0 };
+};
+
+export const formatMinsToReadable = (totalMins: number): string => {
+    const d = Math.floor(totalMins / (24 * 60));
+    const h = Math.floor((totalMins % (24 * 60)) / 60);
+    const m = totalMins % 60;
+    const parts: string[] = [];
+    if (d > 0) parts.push(`${d}DAYS`);
+    if (h > 0) parts.push(`${h}HOURS`);
+    if (m > 0) parts.push(`${m}MINS`);
+    return parts.length > 0 ? parts.join(' ') : '0HOURS';
+};
 
 export const formatDateTimeWithBrackets = (d: any): string => {
     if (!d) return '-';
@@ -367,6 +400,10 @@ export const mapBillSummaryToState = (summary: any, targetAdmission: any) => {
                 svcName = svcName.replace(/\s*\((?:Qty\/Days|Qty|Days):\s*[0-9.]+\)/i, '').trim();
             }
         }
+        const isItemMerged = Boolean(
+            item.isMerged ||
+            (Array.isArray(item.mergedFrom) && item.mergedFrom.length > 0)
+        );
         mappedSvcs.push({
             id: uid(),
             code: item.code || (item._id ? `SVC${item._id.toString().slice(-6).toUpperCase()}` : `SVC${idx + 1}`),
@@ -375,6 +412,8 @@ export const mapBillSummaryToState = (summary: any, targetAdmission: any) => {
             rate: svcRate,
             quantity: svcQty as any,
             amount: itemAmount,
+            isMerged: isItemMerged,
+            rawChargeId: item._id,
         });
     });
 
@@ -429,9 +468,10 @@ interface CardProps {
     children: React.ReactNode;
     onAdd: () => void;
     total?: number;
+    extraAction?: React.ReactNode;
 }
 
-const Card = ({ icon, title, color, children, onAdd, total }: CardProps) => {
+const Card = ({ icon, title, color, children, onAdd, total, extraAction }: CardProps) => {
     const colorMap: any = {
         indigo: 'bg-indigo-50 text-indigo-600 border-indigo-100',
         emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100',
@@ -453,7 +493,10 @@ const Card = ({ icon, title, color, children, onAdd, total }: CardProps) => {
                         )}
                     </div>
                 </div>
-                <AddBtn onClick={onAdd} />
+                <div className="flex items-center gap-2">
+                    {extraAction}
+                    <AddBtn onClick={onAdd} />
+                </div>
             </div>
             <div className="overflow-x-auto p-1.5 sm:p-2">
                 {children}
@@ -1203,7 +1246,7 @@ export default function TransactionReportsPage() {
     const totDoc = doctors.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.visits), 0);
     const totAdm = admissions.reduce((s, r) => s + (r.amount != null ? r.amount : (r.rate * (typeof r.days === 'number' ? r.days : 1))), 0);
     const totMed = meds.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.quantity), 0);
-    const totSvc = services.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.quantity), 0);
+    const totSvc = services.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * (Number(r.quantity) || 1)), 0);
     const totDiag = diags.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.quantity), 0);
     const totPaid = payments.filter(p => !p.status || p.status === 'Paid' || p.status === 'Completed').reduce((s, r) => s + Number(r.amount || 0), 0);
 
@@ -1443,9 +1486,144 @@ export default function TransactionReportsPage() {
         return nx;
     }));
     const updM = (i: number, k: keyof MedCharge, v: any) => setMeds(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'quantity') nx.amount = nx.rate * nx.quantity; return nx; }));
-    const updS = (i: number, k: keyof ServiceCharge, v: any) => setServices(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'quantity') nx.amount = nx.rate * nx.quantity; return nx; }));
-    const updDiag = (i: number, k: keyof DiagCharge, v: any) => setDiags(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'quantity') nx.amount = nx.rate * nx.quantity; return nx; }));
+    const updS = (i: number, k: keyof ServiceCharge, v: any) => setServices(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'quantity') nx.amount = nx.rate * (Number(nx.quantity) || 1); return nx; }));
+    const updDiag = (i: number, k: keyof DiagCharge, v: any) => setDiags(p => p.map((x, j) => { if (j !== i) return x; const nx = { ...x, [k]: v }; if (k === 'rate' || k === 'quantity') nx.amount = nx.rate * nx.quantity; return nx; })); 
     const updP = (i: number, k: keyof Payment, v: any) => setPay(p => p.map((x, j) => j === i ? { ...x, [k]: v } : x));
+
+    // Detect duplicate services that can be merged
+    const mergeableServicesGroups = React.useMemo(() => {
+        const map: Record<string, ServiceCharge[]> = {};
+        services.forEach(s => {
+            const { baseName } = parseDurationToMins(s.serviceName || '');
+            if (!baseName) return;
+            const key = baseName.toUpperCase();
+            if (!map[key]) map[key] = [];
+            map[key].push(s);
+        });
+        return Object.entries(map).filter(([_, items]) => items.length > 1);
+    }, [services]);
+
+    const [isMergingServices, setIsMergingServices] = useState(false);
+    const [unmergingSvcId, setUnmergingSvcId] = useState<string | null>(null);
+
+    const handleMergeSimilarServices = async () => {
+        if (mergeableServicesGroups.length === 0 || isMergingServices) return;
+        setIsMergingServices(true);
+        try {
+            const targetAdm = admission || availableEncounters.ipd;
+            const admId = targetAdm?._id || targetAdm?.admissionId;
+
+            if (admId) {
+                const billSummary = await ipdService.getBillSummary(admId);
+                const extraItems = billSummary?.extraCharges?.items || [];
+                let backendMerged = false;
+
+                for (const [key] of mergeableServicesGroups) {
+                    const matched = extraItems.filter((i: any) => {
+                        const { baseName } = parseDurationToMins(i.description || '');
+                        return baseName.toUpperCase() === key && i.status !== 'Reversed';
+                    });
+                    if (matched.length > 1) {
+                        const [primary, ...secondaries] = matched;
+                        const totalAmt = matched.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
+                        const { baseName, isQty } = parseDurationToMins(primary.description || '');
+                        let mergedDesc: string;
+                        if (isQty) {
+                            const totalQty = matched.reduce((s: number, i: any) => s + (parseDurationToMins(i.description || '').qtyVal || 1), 0);
+                            mergedDesc = `${baseName} (Qty/Days: ${totalQty})`;
+                        } else {
+                            const totalMins = matched.reduce((s: number, i: any) => s + parseDurationToMins(i.description || '').totalMins, 0);
+                            mergedDesc = totalMins > 0 ? `${baseName} (${formatMinsToReadable(totalMins)})` : `${baseName} (Qty/Days: ${matched.length})`;
+                        }
+                        await ipdService.mergeExtraCharges({
+                            primaryChargeId: primary._id,
+                            mergeChargeIds: secondaries.map((s: any) => s._id),
+                            mergedDescription: mergedDesc,
+                            mergedAmount: totalAmt,
+                        });
+                        backendMerged = true;
+                    }
+                }
+
+                if (backendMerged) {
+                    toast.success("Charges merged successfully!");
+                    loadEncounterData('IPD', targetAdm);
+                    return;
+                }
+            }
+        } catch (e: any) {
+            console.warn("Backend merge sync:", e);
+        } finally {
+            setIsMergingServices(false);
+        }
+
+        // Local state fallback if not linked to active DB admission
+        const newSvcs: ServiceCharge[] = [];
+        const processed = new Set<string>();
+        services.forEach(s => {
+            const { baseName, isQty } = parseDurationToMins(s.serviceName || '');
+            const key = baseName.toUpperCase();
+            const group = mergeableServicesGroups.find(([k]) => k === key);
+            if (!group) {
+                newSvcs.push(s);
+                return;
+            }
+            if (processed.has(key)) return;
+            processed.add(key);
+
+            const items = group[1];
+            const totalAmt = items.reduce((s, i) => s + (i.amount != null ? i.amount : (i.rate * (Number(i.quantity) || 1))), 0);
+            let mergedName: string;
+            let resolvedQty = 1;
+            let resolvedRate = totalAmt;
+            if (isQty) {
+                const totalQty = items.reduce((s, i) => s + (parseDurationToMins(i.serviceName || '').qtyVal || Number(i.quantity) || 1), 0);
+                mergedName = `${baseName} (Qty/Days: ${totalQty})`;
+                resolvedQty = totalQty;
+                resolvedRate = Math.round((totalAmt / (totalQty || 1)) * 100) / 100;
+            } else {
+                const totalMins = items.reduce((s, i) => s + parseDurationToMins(i.serviceName || '').totalMins, 0);
+                if (totalMins > 0) {
+                    mergedName = `${baseName} (${formatMinsToReadable(totalMins)})`;
+                } else {
+                    mergedName = `${baseName} (Qty/Days: ${items.length})`;
+                    resolvedQty = items.length;
+                    resolvedRate = Math.round((totalAmt / items.length) * 100) / 100;
+                }
+            }
+            newSvcs.push({
+                ...items[0],
+                serviceName: mergedName,
+                quantity: resolvedQty,
+                rate: resolvedRate,
+                amount: totalAmt,
+                isMerged: true,
+            });
+        });
+        setServices(newSvcs);
+        toast.success(`Merged ${mergeableServicesGroups.length} duplicate service group(s)!`);
+        setIsMergingServices(false);
+    };
+
+    const handleUnmergeReportService = async (service: ServiceCharge) => {
+        if (!service.rawChargeId) {
+            toast.error("Original charge reference not found in database");
+            return;
+        }
+        try {
+            setUnmergingSvcId(service.id);
+            await ipdService.unmergeExtraCharges(service.rawChargeId);
+            toast.success("Charges unmerged successfully! Restoring individual items...");
+            const targetAdm = admission || availableEncounters.ipd;
+            if (targetAdm) {
+                loadEncounterData('IPD', targetAdm);
+            }
+        } catch (e: any) {
+            toast.error(e.response?.data?.message || e.message || "Failed to unmerge charges");
+        } finally {
+            setUnmergingSvcId(null);
+        }
+    };
 
     return (
         <div className="w-full max-w-[98%] mx-auto space-y-4 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
@@ -1852,18 +2030,63 @@ export default function TransactionReportsPage() {
                         )}
 
                         {printConfig.services && (
-                            <Card icon={<Wrench className="w-4 h-4" />} title="Services" color="indigo" total={totSvc} onAdd={() => setServices(p => [...p, { id: uid(), code: `SVC${p.length + 1}`, date: new Date().toISOString(), serviceName: '', rate: 0, quantity: 1 }])}>
+                            <Card 
+                                icon={<Wrench className="w-4 h-4" />} 
+                                title="Services" 
+                                color="indigo" 
+                                total={totSvc} 
+                                onAdd={() => setServices(p => [...p, { id: uid(), code: `SVC${p.length + 1}`, date: new Date().toISOString(), serviceName: '', rate: 0, quantity: 1 }])}
+                                extraAction={
+                                    mergeableServicesGroups.length > 0 ? (
+                                        <button
+                                            type="button"
+                                            onClick={handleMergeSimilarServices}
+                                            disabled={isMergingServices}
+                                            className="flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-[8px] sm:text-[9px] font-black uppercase tracking-widest rounded-lg shadow-sm transition-all disabled:opacity-50"
+                                            title="Consolidate duplicate charges sharing the same service name into single rows"
+                                        >
+                                            <ArrowRightLeft size={11} />
+                                            <span>{isMergingServices ? 'Merging...' : `Merge Similar (${mergeableServicesGroups.length})`}</span>
+                                        </button>
+                                    ) : null
+                                }
+                            >
                                 <table className="w-full text-left">
                                     <thead><tr>{['Service Name', 'Date / Time', 'Rate (₹)', 'Quantity', 'Amount', ''].map(h => <th key={h} className={thClass}>{h}</th>)}</tr></thead>
                                     <tbody>
                                         {services.map((s, i) => (
                                             <tr key={i}>
-                                                <td className="p-1"><input value={s.serviceName || ''} onChange={(e) => updS(i, 'serviceName', e.target.value)} className={tableInputClass} placeholder="Service Name" /></td>
+                                                <td className="p-1">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <input value={s.serviceName || ''} onChange={(e) => updS(i, 'serviceName', e.target.value)} className={tableInputClass} placeholder="Service Name" />
+                                                        {s.isMerged && (
+                                                            <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded text-[8px] font-black uppercase shrink-0">
+                                                                Merged
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </td>
                                                 <td className="p-1 whitespace-nowrap"><span className="text-[10px] font-bold text-slate-600 px-2 py-1.5 bg-slate-50 rounded-lg whitespace-nowrap block">{formatDateTimeWithBrackets(s.date || admission?.admissionDate)}</span></td>
                                                 <td className="p-1"><input type="number" min={0} value={s.rate === 0 ? '' : s.rate} onChange={(e) => updS(i, 'rate', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="0" /></td>
                                                 <td className="p-1"><input type="number" min={0} value={s.quantity === 0 ? '' : s.quantity} onChange={(e) => updS(i, 'quantity', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))} onWheel={(e) => e.currentTarget.blur()} onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }} onFocus={(e) => e.target.select()} className={tableInputClass} placeholder="1" /></td>
-                                                <td className="p-1 px-3 text-xs font-black text-slate-700">{fmt(s.amount != null ? s.amount : s.rate * s.quantity)}</td>
-                                                <td className="p-1 text-right"><DelBtn onClick={() => setServices(p => p.filter((_, j) => j !== i))} /></td>
+                                                <td className="p-1 px-3 text-xs font-black text-slate-700">{fmt(s.amount != null ? s.amount : Number(s.rate) * Number(s.quantity))}</td>
+                                                <td className="p-1 text-right whitespace-nowrap">
+                                                    <div className="flex items-center justify-end gap-1">
+                                                        {s.isMerged && s.rawChargeId && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleUnmergeReportService(s)}
+                                                                disabled={unmergingSvcId === s.id}
+                                                                className="px-2 py-1 text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-all print:hidden flex items-center gap-1 text-[8px] font-black uppercase tracking-wider disabled:opacity-50"
+                                                                title="Unmerge this charge back into original separate charges"
+                                                            >
+                                                                <ArrowRightLeft size={10} />
+                                                                <span>{unmergingSvcId === s.id ? '...' : 'Unmerge'}</span>
+                                                            </button>
+                                                        )}
+                                                        <DelBtn onClick={() => setServices(p => p.filter((_, j) => j !== i))} />
+                                                    </div>
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>

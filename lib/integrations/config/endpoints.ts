@@ -463,6 +463,7 @@ export const IPD_ENDPOINTS = {
     CHARGE: "/ipd/billing/charge",
     CHARGE_DETAIL: (id: string) => `/ipd/billing/charge/${id}`,
     CHARGE_MERGE: "/ipd/billing/charge/merge",
+    CHARGE_UNMERGE: "/ipd/billing/charge/unmerge",
     BED_CHARGE: (id: string) => `/ipd/billing/bed-charge/${id}`,
     ADVANCE: "/ipd/billing/advance",
     DISCOUNT: "/ipd/billing/discount",
