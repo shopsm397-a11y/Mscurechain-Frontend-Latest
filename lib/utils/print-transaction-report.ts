@@ -459,7 +459,9 @@ export const generateTransactionReportHTML = (
         
         let receiptTotal = 0;
         reportData.payments.forEach((p: any, idx: number) => {
-            if (!p.status || p.status === 'Paid' || p.status === 'Completed') {
+            const st = String(p.status || p.transactionType || '').trim().toLowerCase();
+            const isPaid = (!st || st === 'paid' || st === 'completed' || st === 'settlement' || st === 'advance' || st === 'success' || st === 'cleared') && !st.includes('fail') && !st.includes('cancel') && !st.includes('reverse') && !st.includes('pend');
+            if (isPaid) {
                 receiptTotal += Number(p.amount || 0);
                 
                 let modeText = p.mode || p.paymentMode || 'Paid';

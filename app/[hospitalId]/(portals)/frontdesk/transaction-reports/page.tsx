@@ -236,6 +236,30 @@ export const normalizeDiag = (d: any, idx: number = 0, defaultCategory: 'investi
     };
 };
 
+export const normalizePayment = (p: any, idx: number = 0): Payment => {
+    const rawStatus = String(p?.status || p?.transactionType || '').trim();
+    let normStatus = 'Paid';
+    if (!rawStatus) {
+        normStatus = 'Paid';
+    } else if (/pending/i.test(rawStatus)) {
+        normStatus = 'Pending';
+    } else if (/fail|cancel|reverse/i.test(rawStatus)) {
+        normStatus = 'Failed';
+    } else {
+        normStatus = 'Paid';
+    }
+
+    return {
+        id: p?.id || p?._id || uid(),
+        receiptNo: p?.receiptNo || p?.receiptNumber || p?.reference || `REC${String(idx + 1).padStart(5, '0')}`,
+        date: p?.date || p?.createdAt || p?.dateTime || new Date().toISOString(),
+        mode: p?.mode || p?.paymentMode || 'Cash',
+        status: normStatus,
+        amount: Number(p?.amount || 0),
+        paymentDetails: p?.paymentDetails || undefined,
+    };
+};
+
 export const mapBillSummaryToState = (summary: any, targetAdmission: any) => {
     if (!summary) return null;
     const extraItems = summary?.extraCharges?.items || [];
@@ -418,15 +442,7 @@ export const mapBillSummaryToState = (summary: any, targetAdmission: any) => {
     });
 
     // 3. Payments
-    const mappedPay: Payment[] = advanceItems.map((adv: any, i: number) => ({
-        id: adv._id || uid(),
-        receiptNo: adv.reference || `REC${String(i + 1).padStart(5, '0')}`,
-        date: adv.date || adv.createdAt || Date.now(),
-        mode: adv.mode || 'Cash',
-        status: (!adv.transactionType || adv.transactionType.toLowerCase() === 'advance') ? 'Paid' : adv.transactionType,
-        amount: Number(adv.amount || 0),
-        paymentDetails: adv.paymentDetails || undefined,
-    }));
+    const mappedPay: Payment[] = advanceItems.map((adv: any, i: number) => normalizePayment(adv, i));
 
     return {
         doctors: mappedDocs,
@@ -984,7 +1000,7 @@ export default function TransactionReportsPage() {
                 setMeds((data.meds || []).map(normalizeMed));
                 setServices((data.services || []).map(normalizeService));
                 setDiags([...(data.diags || []), ...(data.rads || [])].map((x: any, i: number) => normalizeDiag(x, i, x.category || 'investigation')));
-                setPay(data.payments || []);
+                setPay((data.payments || []).map(normalizePayment));
                 setDiscount(data.discount || 0);
                 if (data.printConfig) setPrintConfig(prev => ({ ...prev, ...data.printConfig }));
             } catch (e) { console.error("Failed to parse saved draft", e); }
@@ -1020,7 +1036,7 @@ export default function TransactionReportsPage() {
                                 setMeds(mapped.meds);
                                 setServices(mapped.services);
                                 setDiags(mapped.diags);
-                                setPay(mapped.payments);
+                                setPay((mapped.payments || []).map(normalizePayment));
                                 setDiscount(mapped.discount);
                                 loaded = true;
                             }
@@ -1041,7 +1057,7 @@ export default function TransactionReportsPage() {
                             ...(r.reportData?.diags || []).map((x: any, i: number) => normalizeDiag(x, i, 'investigation')),
                             ...(r.reportData?.rads || []).map((x: any, i: number) => normalizeDiag(x, i, 'radiology'))
                         ]);
-                        setPay(r.reportData?.payments || []);
+                        setPay((r.reportData?.payments || []).map(normalizePayment));
                         setDiscount(r.totals?.discount || 0);
                         if (r.admission) setAdmission(r.admission);
                     } else {
@@ -1093,7 +1109,7 @@ export default function TransactionReportsPage() {
                         ...(r.reportData?.diags || []).map((x: any, i: number) => normalizeDiag(x, i, 'investigation')),
                         ...(r.reportData?.rads || []).map((x: any, i: number) => normalizeDiag(x, i, 'radiology'))
                     ]);
-                    setPay(r.reportData?.payments || []);
+                    setPay((r.reportData?.payments || []).map(normalizePayment));
                     setDiscount(r.totals?.discount || 0);
                 } else {
                     setDoctors([]);
@@ -1194,7 +1210,7 @@ export default function TransactionReportsPage() {
                             ...(r.reportData?.diags || []).map((x: any, i: number) => normalizeDiag(x, i, 'investigation')),
                             ...(r.reportData?.rads || []).map((x: any, i: number) => normalizeDiag(x, i, 'radiology'))
                         ]);
-                        setPay(r.reportData?.payments || []);
+                        setPay((r.reportData?.payments || []).map(normalizePayment));
                         setDiscount(r.totals?.discount || 0);
                         if (r.reportData?.dischargeData) {
                             setDischargeData(r.reportData.dischargeData);
@@ -1247,8 +1263,19 @@ export default function TransactionReportsPage() {
     const totAdm = admissions.reduce((s, r) => s + (r.amount != null ? r.amount : (r.rate * (typeof r.days === 'number' ? r.days : 1))), 0);
     const totMed = meds.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.quantity), 0);
     const totSvc = services.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * (Number(r.quantity) || 1)), 0);
-    const totDiag = diags.reduce((s, r) => s + (r.amount != null ? r.amount : r.rate * r.quantity), 0);
-    const totPaid = payments.filter(p => !p.status || p.status === 'Paid' || p.status === 'Completed').reduce((s, r) => s + Number(r.amount || 0), 0);
+    const isPaymentPaid = (p: Payment): boolean => {
+        if (!p) return false;
+        const st = String(p.status || '').trim().toLowerCase();
+        if (!st || st === 'paid' || st === 'completed' || st === 'settlement' || st === 'advance' || st === 'success' || st === 'cleared') {
+            return true;
+        }
+        if (st.includes('fail') || st.includes('cancel') || st.includes('reverse') || st.includes('pend')) {
+            return false;
+        }
+        return true;
+    };
+
+    const totPaid = payments.filter(isPaymentPaid).reduce((s, r) => s + Number(r.amount || 0), 0);
 
     const visibleDiags = diags.filter(d =>
         d.category === 'radiology' ? printConfig.radiology : printConfig.investigations
