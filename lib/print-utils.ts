@@ -2755,6 +2755,7 @@ export const generateClinicalReceiptHtml = (data: any) => {
           }
           receiptList = synth;
         }
+        const receiptTotal = receiptList.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
         return `
                           <div style="margin-top: 12px; border-top: 1.5px solid #0f172a; padding-top: 8px;">
                             <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; color: #0f172a; margin-bottom: 5px; letter-spacing: 0.5px;">Receipt Details :</div>
@@ -2786,7 +2787,7 @@ export const generateClinicalReceiptHtml = (data: any) => {
         }).join('')}
                                 <tr style="background-color: #f8fafc; font-weight: 800; border-top: 1.5px solid #0f172a; border-bottom: 1.5px solid #0f172a;">
                                   <td colspan="3" style="padding: 5px 6px; text-align: right; text-transform: uppercase;">Total :</td>
-                                  <td style="padding: 5px 6px; text-align: right; color: #0f766e; font-size: 11px;">₹ ${Math.round(totalPaid).toLocaleString('en-IN')}</td>
+                                  <td style="padding: 5px 6px; text-align: right; color: #0f766e; font-size: 11px;">₹ ${Math.round(receiptTotal > 0 ? receiptTotal : totalPaid).toLocaleString('en-IN')}</td>
                                   <td style="padding: 5px 6px;"></td>
                                 </tr>
                               </tbody>

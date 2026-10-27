@@ -1760,7 +1760,22 @@ export default function TransactionsPage() {
                     .filter((r: any) => r.type === 'Settlement')
                     .reduce((sum: number, r: any) => sum + r.amount, 0);
 
-                const discount = Number(apptData.discount || previewTx.discount || 0);
+                let discount = Number(
+                    apptData.discount ||
+                    apptData.discountAmount ||
+                    apptData.discountDetails?.amount ||
+                    apptData.financials?.discount ||
+                    apptData.billingDetails?.discount ||
+                    previewTx.discount ||
+                    previewTx.discountAmount ||
+                    previewTx.discountDetails?.amount ||
+                    (previewTx.paymentDetails as any)?.discount ||
+                    (previewTx.referenceId as any)?.discount ||
+                    (previewTx.referenceId as any)?.discountDetails?.amount ||
+                    (previewTx.referenceId as any)?.financials?.discount ||
+                    0
+                );
+
                 const grandTotal = Number(
                     apptData.totalBillAmount ||
                     apptData.grandTotal ||
@@ -1780,13 +1795,20 @@ export default function TransactionsPage() {
                     : Number(previewTx.amount || previewTx.payment?.amount || apptData.settlementAmount || apptData.remainingPaid || 0);
 
                 if (isDischargeTx) {
+                    const isFullySettled = (previewTx.status || '').toLowerCase() === 'completed' || 
+                                          (previewTx.status || '').toLowerCase() === 'paid' || 
+                                          Number(apptData.dueAmount ?? apptData.balance ?? 0) === 0;
+
+                    // If discount wasn't explicitly supplied, but grandTotal exceeds the paid amounts and transaction is paid/completed
+                    if (discount === 0 && isFullySettled && grandTotal > (advanceAmount + settlementPaid)) {
+                        discount = Math.max(0, grandTotal - advanceAmount - settlementPaid);
+                    }
+
                     const expectedRemaining = Math.max(0, grandTotal - discount - advanceAmount);
                     if (previewTx.amount && Math.abs(Number(previewTx.amount) - expectedRemaining) < 1) {
                         settlementPaid = Number(previewTx.amount);
-                    } else if (settlementPaid === 0 || Math.abs(settlementPaid - expectedRemaining) > 0.01) {
-                        if (expectedRemaining > 0) {
-                            settlementPaid = expectedRemaining;
-                        }
+                    } else if (settlementPaid === 0 && expectedRemaining > 0) {
+                        settlementPaid = expectedRemaining;
                     }
                 }
 

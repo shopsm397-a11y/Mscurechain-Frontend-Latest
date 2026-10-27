@@ -170,7 +170,15 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
   const [showGuardianDetails, setShowGuardianDetails] = React.useState(true);
   
   // Manual discount / waiver adjustment before printing
-  const initialDiscount = Number(payment.discount || (appointment as any).discount || 0);
+  const initialDiscount = Number(
+    payment.discount ||
+    (payment as any).discountAmount ||
+    (payment as any).discountDetails?.amount ||
+    (appointment as any).discount ||
+    (appointment as any).discountAmount ||
+    (appointment as any).discountDetails?.amount ||
+    0
+  );
   const [customDiscount, setCustomDiscount] = React.useState<number>(initialDiscount);
   const [isEditingDiscount, setIsEditingDiscount] = React.useState(false);
 
@@ -298,6 +306,10 @@ function ClinicalReceipt({ hospital: propHospital, patient, appointment, payment
           ...payment,
           date: resolvedDate,
           discount: effectiveDiscount,
+          totalPaidAmount: totalPaidCalc,
+          paidAmount: totalPaidCalc,
+          remainingPaid: settlementPaidCalc,
+          settlementAmount: settlementPaidCalc,
           balance: newBalanceCalc,
           dueAmount: newBalanceCalc,
         };
