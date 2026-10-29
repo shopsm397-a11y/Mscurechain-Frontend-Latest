@@ -18,6 +18,7 @@ import {
     Download,
     Package,
     Calendar,
+    Trash2,
 } from "lucide-react";
 import { helpdeskService, ipdService } from "@/lib/integrations";
 import { hospitalAdminService } from "@/lib/integrations/services/hospitalAdmin.service";
@@ -31,6 +32,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import MainHeader from '@/components/printers/MainHeader';
 import MainFooter from '@/components/printers/MainFooter';
 import EditTransactionModal from './EditTransactionModal';
+import DeleteTransactionModal from './DeleteTransactionModal';
 import ClinicalReceipt from '@/components/helpdesk/ClinicalReceipt';
 import { formatTime12Hr } from '@/lib/print-utils';
 import { getDateRangeForPreset } from '@/lib/utils/date-utils';
@@ -159,8 +161,28 @@ export default function TransactionsPage() {
     const [hospital, setHospital] = useState<any>(null);
     const [showEditedOnly, setShowEditedOnly] = useState(false);
     const [editingTx, setEditingTx] = useState<any>(null);
+    const [deletingTx, setDeletingTx] = useState<any>(null);
+    const [deletedTxIds, setDeletedTxIds] = useState<Set<string>>(new Set());
     const [previewTx, setPreviewTx] = useState<any>(null);
     const [fullPatient, setFullPatient] = useState<any>(null);
+
+    // ⚡ INSTANT OPTIMISTIC REMOVAL: Remove deleted transaction from UI in 0 milliseconds
+    const handleDeleteSuccess = (deletedTx: any) => {
+        const idsToAdd: string[] = [];
+        if (deletedTx._id) idsToAdd.push(String(deletedTx._id));
+        if (deletedTx.id) idsToAdd.push(String(deletedTx.id));
+        if (deletedTx.referenceId?._id) idsToAdd.push(String(deletedTx.referenceId._id));
+        if (typeof deletedTx.referenceId === 'string') idsToAdd.push(String(deletedTx.referenceId));
+        if (deletedTx.invoiceNumber) idsToAdd.push(String(deletedTx.invoiceNumber));
+        if (deletedTx.receiptNumber) idsToAdd.push(String(deletedTx.receiptNumber));
+        if (deletedTx.transactionId) idsToAdd.push(String(deletedTx.transactionId));
+
+        setDeletedTxIds(prev => {
+            const next = new Set(prev);
+            idsToAdd.forEach(id => next.add(id));
+            return next;
+        });
+    };
 
     // Fetch full patient profile on receipt preview if needed
     useEffect(() => {
@@ -882,19 +904,47 @@ export default function TransactionsPage() {
         }
     };
 
-    const filteredTransactions = transactions.filter((tx: any) => {
-        const isCancelled = tx.status?.toLowerCase() === 'cancelled' || tx.referenceId?.status?.toLowerCase() === 'cancelled';
-        const isPharmacy = tx.type?.toLowerCase().includes('pharma') || tx.type?.toLowerCase().includes('pharmacy');
-        return !isCancelled && !isPharmacy;
-    });
+    const filteredTransactions = useMemo(() => {
+        return transactions.filter((tx: any) => {
+            const txId = String(tx._id || tx.id || '');
+            const refId = String(tx.referenceId?._id || (typeof tx.referenceId === 'string' ? tx.referenceId : '') || '');
+            const invId = String(tx.invoiceNumber || tx.receiptNumber || tx.transactionId || '');
+            if (
+                (txId && deletedTxIds.has(txId)) ||
+                (refId && deletedTxIds.has(refId)) ||
+                (invId && deletedTxIds.has(invId))
+            ) {
+                return false;
+            }
+            const isCancelled = tx.status?.toLowerCase() === 'cancelled' || tx.referenceId?.status?.toLowerCase() === 'cancelled';
+            const isPharmacy = tx.type?.toLowerCase().includes('pharma') || tx.type?.toLowerCase().includes('pharmacy');
+            return !isCancelled && !isPharmacy;
+        });
+    }, [transactions, deletedTxIds]);
 
-    // Calculate stats based on filtered transactions
+    // Calculate stats based on filtered transactions with optimistic deductions
     const stats = useMemo(() => {
-        const grossRevenue = totalRevenue;
-        const operationVolume = total;
-        const quantumDensity = total > 0 ? (totalRevenue / total) : 0;
+        let deductedAmount = 0;
+        let deductedCount = 0;
+        transactions.forEach((tx: any) => {
+            const txId = String(tx._id || tx.id || '');
+            const refId = String(tx.referenceId?._id || (typeof tx.referenceId === 'string' ? tx.referenceId : '') || '');
+            const invId = String(tx.invoiceNumber || tx.receiptNumber || tx.transactionId || '');
+            if (
+                (txId && deletedTxIds.has(txId)) ||
+                (refId && deletedTxIds.has(refId)) ||
+                (invId && deletedTxIds.has(invId))
+            ) {
+                deductedAmount += Number(tx.payment?.amount || tx.amount || 0);
+                deductedCount += 1;
+            }
+        });
+
+        const grossRevenue = Math.max(0, totalRevenue - deductedAmount);
+        const operationVolume = Math.max(0, total - deductedCount);
+        const quantumDensity = operationVolume > 0 ? (grossRevenue / operationVolume) : 0;
         return { grossRevenue, operationVolume, quantumDensity };
-    }, [totalRevenue, total]);
+    }, [totalRevenue, total, transactions, deletedTxIds]);
 
     // 🖨️ PRINT: Single transaction receipt
     const handlePrintTransaction = async (tx: any) => {
@@ -1422,7 +1472,7 @@ export default function TransactionsPage() {
                                     <th className="px-2 sm:px-4 py-2 sm:py-3 text-center">Amount (INR)</th>
                                     <th className="px-2 sm:px-4 py-2 sm:py-3 text-center">Status</th>
                                     <th className="px-2 sm:px-4 py-2 sm:py-3 text-center">Mode</th>
-                                    <th className="min-w-[80px] sm:min-w-[100px] px-2 sm:px-4 py-2 sm:py-3 text-center">Print</th>
+                                    <th className="min-w-[90px] sm:min-w-[120px] px-2 sm:px-4 py-2 sm:py-3 text-center">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -1625,8 +1675,8 @@ export default function TransactionsPage() {
                                                 </div>
                                             </td>
                                             {/* ACTION COLUMN */}
-                                            <td className="min-w-[80px] sm:min-w-[100px] px-2 sm:px-4 py-2 sm:py-3 text-center">
-                                                <div className="flex items-center justify-center gap-1 sm:gap-2">
+                                            <td className="min-w-[90px] sm:min-w-[120px] px-2 sm:px-4 py-2 sm:py-3 text-center">
+                                                <div className="flex items-center justify-center gap-1 sm:gap-1.5">
                                                     <button
                                                         onClick={() => setEditingTx(tx)}
                                                         className="p-1 sm:p-1.5 text-slate-300 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-all border border-transparent hover:border-amber-100"
@@ -1640,6 +1690,13 @@ export default function TransactionsPage() {
                                                         title="Print Receipt"
                                                     >
                                                         <Printer size={14} />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setDeletingTx(tx)}
+                                                        className="p-1 sm:p-1.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all border border-transparent hover:border-rose-100"
+                                                        title="Delete Transaction"
+                                                    >
+                                                        <Trash2 size={14} />
                                                     </button>
                                                 </div>
                                             </td>
@@ -1661,6 +1718,15 @@ export default function TransactionsPage() {
                 <EditTransactionModal 
                     tx={editingTx} 
                     onClose={() => setEditingTx(null)} 
+                />
+            )}
+
+            {deletingTx && (
+                <DeleteTransactionModal 
+                    tx={deletingTx} 
+                    patientName={getPatientNameWithPrefix(deletingTx, patientHonorificMap, patientCanonicalNameMap)}
+                    onClose={() => setDeletingTx(null)} 
+                    onSuccess={handleDeleteSuccess}
                 />
             )}
 

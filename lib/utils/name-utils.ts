@@ -74,9 +74,12 @@ export const HONORIFIC_OPTION_ITEMS: PatientPrefixItem[] = [
   { value: "Ms.", label: "Ms." },
   { value: "Miss", label: "Miss" },
   { value: "Master", label: "Master" },
+  { value: "Child", label: "Child" },
   { value: "Baby", label: "Baby" },
   { value: "Baby of", label: "Baby of (B/O)" },
   { value: "B/O", label: "B/O (Baby of)" },
+  { value: "Infant", label: "Infant" },
+  { value: "Newborn", label: "Newborn" },
   { value: "S/O", label: "S/O (Son of)" },
   { value: "D/O", label: "D/O (Daughter of)" },
   { value: "W/O", label: "W/O (Wife of)" },
@@ -92,6 +95,9 @@ export const HONORIFIC_OPTION_ITEMS: PatientPrefixItem[] = [
   { value: "P/O", label: "P/O (Parent of)" },
   { value: "U/O", label: "U/O (Under the Care of)" },
   { value: "T/O", label: "T/O (Twin of)" },
+  { value: "Sri", label: "Sri" },
+  { value: "Smt.", label: "Smt." },
+  { value: "Kumari", label: "Kumari" },
   { value: "Dr.", label: "Dr." },
   { value: "Prof.", label: "Prof." }
 ];
@@ -105,9 +111,12 @@ export const PATIENT_PREFIX_LIST: PatientPrefixItem[] = [
   { value: "Miss", label: "MISS" },
   { value: "Dr", label: "DR" },
   { value: "Master", label: "MASTER" },
+  { value: "Child", label: "CHILD" },
   { value: "Baby", label: "BABY" },
   { value: "Baby of", label: "BABY OF (B/O)" },
   { value: "B/O", label: "B/O (Baby of)" },
+  { value: "Infant", label: "INFANT" },
+  { value: "Newborn", label: "NEWBORN" },
   { value: "S/O", label: "S/O (Son of)" },
   { value: "D/O", label: "D/O (Daughter of)" },
   { value: "W/O", label: "W/O (Wife of)" },
@@ -123,6 +132,9 @@ export const PATIENT_PREFIX_LIST: PatientPrefixItem[] = [
   { value: "P/O", label: "P/O (Parent of)" },
   { value: "U/O", label: "U/O (Under the Care of)" },
   { value: "T/O", label: "T/O (Twin of)" },
+  { value: "Sri", label: "SRI" },
+  { value: "Smt", label: "SMT" },
+  { value: "Kumari", label: "KUMARI" },
   { value: "Prof", label: "PROF" },
 ];
 
@@ -195,9 +207,35 @@ export const cleanPatientName = (name: string | null | undefined, fallback: stri
   const sanitized = sanitizePatientName(name, fallback);
   let cleaned = sanitized.trim();
   
-  // Repeatedly remove leading honorifics/prefixes to prevent duplicates (e.g. "Mr. Mr. Shiva" -> "Shiva")
-  while (/^(mr|mrs|ms|miss|mx|dr|prof|prof\.\s*dr|shri|smt|kumari|sister|father|rev|late|capt|col|maj|adv|er|hon|master|baby\s+of(\s*\(b\/o\))?|baby|b\/o|s\/o(\s*\([^)]*\))?|d\/o(\s*\([^)]*\))?|w\/o(\s*\([^)]*\))?|h\/o(\s*\([^)]*\))?|c\/o(\s*\([^)]*\))?|f\/o(\s*\([^)]*\))?|m\/o(\s*\([^)]*\))?|l\/o(\s*\([^)]*\))?|g\/o(\s*\([^)]*\))?|k\/o(\s*\([^)]*\))?|r\/o(\s*\([^)]*\))?|a\/o(\s*\([^)]*\))?|p\/o(\s*\([^)]*\))?|u\/o(\s*\([^)]*\))?|t\/o(\s*\([^)]*\))?)\.?\s+/i.test(cleaned)) {
-    cleaned = cleaned.replace(/^(mr|mrs|ms|miss|mx|dr|prof|prof\.\s*dr|shri|smt|kumari|sister|father|rev|late|capt|col|maj|adv|er|hon|master|baby\s+of(\s*\(b\/o\))?|baby|b\/o|s\/o(\s*\([^)]*\))?|d\/o(\s*\([^)]*\))?|w\/o(\s*\([^)]*\))?|h\/o(\s*\([^)]*\))?|c\/o(\s*\([^)]*\))?|f\/o(\s*\([^)]*\))?|m\/o(\s*\([^)]*\))?|l\/o(\s*\([^)]*\))?|g\/o(\s*\([^)]*\))?|k\/o(\s*\([^)]*\))?|r\/o(\s*\([^)]*\))?|a\/o(\s*\([^)]*\))?|p\/o(\s*\([^)]*\))?|u\/o(\s*\([^)]*\))?|t\/o(\s*\([^)]*\))?)\.?\s+/i, "").trim();
+  // Comprehensive prefix pattern matching standard medical, regional, and pediatric titles
+  const prefixPattern = /^(mr|mrs|ms|miss|mx|dr|prof|prof\.\s*dr|shri|sri|sree|smt|kumari|kum|sister|father|rev|late|capt|col|maj|adv|er|hon|master|child|chld|kid|infant|newborn|nb|ch|chi|selvan|selvi|baby\s+of(\s*\(b\/o\))?|baby|b\/o|son\s+of|daughter\s+of|wife\s+of|husband\s+of|care\s+of|father\s+of|mother\s+of|twin\s+of|twin|guardian\s+of|legal\s+guardian\s+of|s\/o(\s*\([^)]*\))?|d\/o(\s*\([^)]*\))?|w\/o(\s*\([^)]*\))?|h\/o(\s*\([^)]*\))?|c\/o(\s*\([^)]*\))?|f\/o(\s*\([^)]*\))?|m\/o(\s*\([^)]*\))?|l\/o(\s*\([^)]*\))?|g\/o(\s*\([^)]*\))?|k\/o(\s*\([^)]*\))?|r\/o(\s*\([^)]*\))?|a\/o(\s*\([^)]*\))?|p\/o(\s*\([^)]*\))?|u\/o(\s*\([^)]*\))?|t\/o(\s*\([^)]*\))?)\.?\s+/i;
+
+  // Repeatedly remove leading honorifics/prefixes to prevent duplicates (e.g. "CHILD CHILD JAMILA" -> "JAMILA")
+  while (prefixPattern.test(cleaned)) {
+    cleaned = cleaned.replace(prefixPattern, "").trim();
+  }
+  
+  // Collapse any accidental repeated consecutive identical words at the beginning
+  cleaned = cleaned.replace(/^(\b\w+\b)(?:\s+\1\b)+/i, '$1').trim();
+
+  // Run cleanup once more in case deduplicated word was an honorific
+  while (prefixPattern.test(cleaned)) {
+    cleaned = cleaned.replace(prefixPattern, "").trim();
+  }
+
+  // Also clean any hospital-specific custom honorifics
+  try {
+    const custom = getHospitalCustomHonorifics();
+    for (const h of custom) {
+      if (!h) continue;
+      const escaped = h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const customRegex = new RegExp(`^${escaped}\\.?\\s+`, 'i');
+      while (customRegex.test(cleaned)) {
+        cleaned = cleaned.replace(customRegex, '').trim();
+      }
+    }
+  } catch {
+    // ignore localStorage errors in non-browser env
   }
   
   return cleaned || fallback;
@@ -220,9 +258,15 @@ export const normalizeHonorific = (honorific: string | null | undefined): string
   }
   if (up === "MISS") return "Miss";
   if (up === "MASTER") return "Master";
+  if (up === "CHILD" || up === "CHLD" || up === "CH") return "Child";
   if (up === "BABY") return "Baby";
   if (up === "BABY OF" || up === "BABY OF (B/O)") return "Baby of";
   if (up === "B/O") return "B/O";
+  if (up === "INFANT") return "Infant";
+  if (up === "NEWBORN" || up === "NB") return "Newborn";
+  if (up === "SRI" || up === "SREE" || up === "SHRI") return "Sri";
+  if (up === "SMT") return "Smt.";
+  if (up === "KUMARI" || up === "KUM") return "Kumari";
   if (up === "LATE") return "Late";
 
   // Standard relationship prefixes
@@ -255,16 +299,34 @@ export const formatPatientNameWithPrefix = (
   // If honorific was not explicitly passed, check if name already has an embedded honorific
   if (!normHonorific && name) {
     const trimmedName = name.trim();
-    const match = trimmedName.match(/^(baby\s+of(\s*\(b\/o\))?|baby|b\/o|mr|mrs|ms|miss|master|dr|prof|shri|smt|kumari|late|s\/o|d\/o|w\/o|h\/o|c\/o)\.?\s+/i);
+    const match = trimmedName.match(/^(baby\s+of(\s*\(b\/o\))?|baby|b\/o|child|infant|newborn|mr|mrs|ms|miss|master|dr|prof|sri|sree|shri|smt|kumari|late|s\/o|d\/o|w\/o|h\/o|c\/o)\.?\s+/i);
     if (match) {
       normHonorific = normalizeHonorific(match[1]);
     }
   }
 
   if (normHonorific) {
+    const upHonorific = normHonorific.toUpperCase();
+    const cleanUpper = cleaned.toUpperCase();
+
+    // Prevent duplicate prefixing if cleaned already begins with the exact honorific
+    let formatted: string;
+    if (cleanUpper === upHonorific) {
+      formatted = upHonorific;
+    } else if (cleanUpper.startsWith(upHonorific + " ")) {
+      formatted = cleanUpper;
+    } else {
+      formatted = `${upHonorific} ${cleanUpper}`.trim();
+    }
+
+    // Collapse any remaining repeated consecutive identical words at the start
+    formatted = formatted.replace(/^(\b\w+\b)(?:\s+\1\b)+/i, '$1').trim();
+
     if (uppercase) {
-      const upHonorific = normHonorific.toUpperCase();
-      return `${upHonorific} ${cleaned.toUpperCase()}`.trim();
+      return formatted;
+    }
+    if (cleaned.toLowerCase().startsWith(normHonorific.toLowerCase() + " ")) {
+      return cleaned.replace(/^(\b\w+\b)(?:\s+\1\b)+/i, '$1').trim();
     }
     return `${normHonorific} ${cleaned}`.trim();
   }
